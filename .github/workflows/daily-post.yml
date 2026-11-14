@@ -59,7 +59,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data docs
+          git add -A data docs inbox
           git commit -m "post: prepare $(date +%F)"
           git push
 
@@ -70,5 +70,5 @@ jobs:
       - name: Commit result
         if: always()
         run: |
-          git add data docs
+          git add -A data docs inbox
           git diff --cached --quiet || (git commit -m "post: publish $(date +%F)" && git push)

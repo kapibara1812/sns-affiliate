@@ -15,8 +15,9 @@ from .site import build_site
 
 
 def cmd_prepare(args, settings):
-    post = pipeline.prepare(settings, genre_id=args.genre)
-    print(f"#{post['number']:03d} [{post['genre']}] {post['short_name']} を準備しました → {post['image_path']}")
+    post = pipeline.prepare(settings, genre_id=args.genre, use_inbox=not args.no_inbox)
+    kind = "写真カルーセル" if post.get("source") == "photo" else "自動選定"
+    print(f"#{post['number']:03d} [{post['genre']}] {post['short_name']}（{kind}・{len(post['images'])}枚）を準備しました")
     print("-" * 40)
     print(post["caption"])
 
@@ -76,6 +77,7 @@ def main(argv=None) -> int:
 
     p = sub.add_parser("prepare", help="商品を選び、投稿文と画像を生成する")
     p.add_argument("--genre", help="ジャンルID（未指定ならローテーション）")
+    p.add_argument("--no-inbox", action="store_true", help="inbox/ の写真を使わず自動選定する")
     p.set_defaults(func=cmd_prepare)
 
     p = sub.add_parser("publish", help="準備済みの投稿を Instagram に公開する")

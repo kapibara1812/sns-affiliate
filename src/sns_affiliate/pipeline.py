@@ -10,11 +10,11 @@ from pathlib import Path
 
 import requests
 
-from . import config, storage
+from . import config, inbox, storage
 from .caption import CaptionGenerator, compose_caption
-from .image_card import render_card
+from .image_card import render_card, render_photo_cover, render_photo_slide
 from .instagram import InstagramClient
-from .rakuten import Item, RakutenClient
+from .rakuten import Item, RakutenClient, item_code_from_url
 from .site import build_site
 
 
@@ -42,49 +42,60 @@ def choose_item(items: list[Item], exclude: set[str], settings: config.Settings,
     return rng.choice(candidates[:5])
 
 
-def prepare(settings: config.Settings, *, genre_id: str | None = None,
+def prepare(settings: config.Settings, *, genre_id: str | None = None, use_inbox: bool = True,
             rakuten: RakutenClient | None = None, writer: CaptionGenerator | None = None,
-            rng: random.Random | None = None) -> dict:
-    """次の投稿を1件準備し、posts.json と一覧ページを更新する."""
+            rng: random.Random | None = None, inbox_dir: Path | None = None) -> dict:
+    """次の投稿を1件準備し、posts.json と一覧ページを更新する.
+
+    inbox/ に自分で撮った写真があればそれを優先してカルーセル投稿を作る。
+    なければ楽天から商品を自動で選び、文字カード1枚の投稿を作る。
+    """
     rng = rng or random.Random()
     genres = config.load_genres()
     posts = storage.load_posts()
     number = storage.next_number(posts)
-    genre = pick_genre(genres, number, genre_id)
     rakuten = rakuten or RakutenClient(settings)
     writer = writer or CaptionGenerator(settings.claude_model)
-    exclude = storage.recently_posted_codes(posts, settings.repost_cooldown_days)
 
-    item = None
-    keywords = genre["keywords"][:]
-    rng.shuffle(keywords)
-    for keyword in keywords[:3]:
-        item = choose_item(rakuten.search(keyword), exclude, settings, rng)
-        if item:
-            break
-        time.sleep(1.1)  # 楽天APIのレート制限対策
-    if item is None:
-        raise RuntimeError(f"{genre['label']} で条件に合う商品が見つかりませんでした")
+    entries = inbox.list_entries(inbox_dir) if use_inbox else []
+    entry = entries[0] if entries else None
+    if entry:
+        item = rakuten.lookup(item_code_from_url(entry.url))
+        if item is None:
+            raise RuntimeError(f"inbox/{entry.name}: 楽天で商品が見つかりません（URLを確認してください）: {entry.url}")
+        genre = pick_genre(genres, number, genre_id or entry.genre_id)
+        comment, photos = entry.comment, entry.photos
+    else:
+        genre = pick_genre(genres, number, genre_id)
+        item = find_item(rakuten, genre, storage.recently_posted_codes(posts, settings.repost_cooldown_days),
+                         settings, rng)
+        comment, photos = "", []
 
-    copy = writer.generate(item, genre, number)
-    image_name = f"{number:04d}.jpg"
-    image_path = render_card(
-        out_path=config.IMAGES_DIR / image_name,
-        number=number,
-        genre=genre,
-        headline=copy.headline,
-        short_name=copy.short_name,
-        points=copy.points,
-        price=item.price,
-        review_average=item.review_average,
-        review_count=item.review_count,
-        product_image_url=item.image_url if settings.use_product_image else None,
-        account_name=settings.account_name,
-    )
+    copy = writer.generate(item, genre, number, comment, photos)
 
+    card_kwargs = dict(number=number, genre=genre, headline=copy.headline, short_name=copy.short_name,
+                       points=copy.points, price=item.price, review_average=item.review_average,
+                       review_count=item.review_count, account_name=settings.account_name)
+    images: list[Path] = []
+    if photos:
+        out = lambda i: config.IMAGES_DIR / f"{number:04d}-{i:02d}.jpg"  # noqa: E731
+        images.append(render_photo_cover(photo=photos[0], out_path=out(1), number=number, genre=genre,
+                                         headline=copy.headline, short_name=copy.short_name))
+        for i, (photo, telop) in enumerate(zip(photos[1:], copy.slide_captions), start=2):
+            images.append(render_photo_slide(photo=photo, out_path=out(i), caption=telop))
+        images.append(render_card(out_path=out(len(images) + 1), **card_kwargs))
+    else:
+        images.append(render_card(
+            out_path=config.IMAGES_DIR / f"{number:04d}.jpg",
+            product_image_url=item.image_url if settings.use_product_image else None,
+            **card_kwargs,
+        ))
+
+    rel = [str(p.relative_to(config.ROOT)) for p in images]
     post = {
         "number": number,
         "genre": genre["id"],
+        "source": "photo" if photos else "auto",
         "item_code": item.item_code,
         "item_name": item.name,
         "short_name": copy.short_name,
@@ -93,7 +104,8 @@ def prepare(settings: config.Settings, *, genre_id: str | None = None,
         "review_count": item.review_count,
         "item_url": item.item_url,
         "affiliate_url": item.affiliate_url,
-        "image_path": str(image_path.relative_to(config.ROOT)),
+        "image_path": rel[0],
+        "images": rel,
         "headline": copy.headline,
         "points": copy.points,
         "caption": compose_caption(copy, item),
@@ -102,14 +114,29 @@ def prepare(settings: config.Settings, *, genre_id: str | None = None,
     }
     posts.append(post)
     storage.save_posts(posts)
+    if entry:
+        inbox.mark_used(entry, number)
     build_site(posts, genres, settings.site_title)
     return post
 
 
-def public_image_url(settings: config.Settings, post: dict) -> str:
+def find_item(rakuten: RakutenClient, genre: dict, exclude: set[str], settings: config.Settings,
+              rng: random.Random) -> Item:
+    keywords = genre["keywords"][:]
+    rng.shuffle(keywords)
+    for keyword in keywords[:3]:
+        item = choose_item(rakuten.search(keyword), exclude, settings, rng)
+        if item:
+            return item
+        time.sleep(1.1)  # 楽天APIのレート制限対策
+    raise RuntimeError(f"{genre['label']} で条件に合う商品が見つかりませんでした")
+
+
+def public_image_urls(settings: config.Settings, post: dict) -> list[str]:
     if not settings.public_base_url:
         raise RuntimeError("PUBLIC_BASE_URL が設定されていません（例: https://<user>.github.io/sns-affiliate）")
-    return f"{settings.public_base_url}/images/{Path(post['image_path']).name}"
+    paths = post.get("images") or [post["image_path"]]
+    return [f"{settings.public_base_url}/images/{Path(p).name}" for p in paths]
 
 
 def wait_until_reachable(url: str, timeout_sec: int = 600, interval: int = 15) -> None:
@@ -136,11 +163,12 @@ def publish(settings: config.Settings, *, ig: InstagramClient | None = None,
     ig = ig or InstagramClient(settings)
     done = []
     for post in targets:
-        url = public_image_url(settings, post)
+        urls = public_image_urls(settings, post)
         try:
             if wait:
-                wait_until_reachable(url)
-            media = ig.publish_image(url, post["caption"])
+                for url in urls:
+                    wait_until_reachable(url)
+            media = ig.publish(urls, post["caption"])
         except Exception as e:  # 失敗は記録して次回以降に持ち越さない
             post["status"] = "failed"
             post["error"] = str(e)[:500]

@@ -55,15 +55,19 @@ class RakutenClient:
         self.session = session or requests.Session()
 
     def search(self, keyword: str, hits: int = 30, sort: str = "-reviewCount") -> list[Item]:
+        return self._get({"keyword": keyword, "hits": hits, "sort": sort, "imageFlag": 1, "availability": 1})
+
+    def lookup(self, item_code: str) -> Item | None:
+        """商品コード（ショップID:商品ID）で1件取得する."""
+        items = self._get({"itemCode": item_code, "hits": 1})
+        return items[0] if items else None
+
+    def _get(self, extra: dict) -> list[Item]:
         params = {
             "applicationId": self.settings.rakuten_app_id,
             "affiliateId": self.settings.rakuten_affiliate_id,
-            "keyword": keyword,
-            "hits": hits,
-            "sort": sort,
-            "imageFlag": 1,
-            "availability": 1,
             "formatVersion": 2,
+            **extra,
         }
         if self.settings.rakuten_access_key:
             params["accessKey"] = self.settings.rakuten_access_key
@@ -77,3 +81,16 @@ class RakutenClient:
             return [Item.from_api(raw) for raw in resp.json().get("Items", [])]
         resp.raise_for_status()
         return []
+
+
+def item_code_from_url(url: str) -> str:
+    """https://item.rakuten.co.jp/<shop>/<item>/ → <shop>:<item>"""
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url.strip())
+    if parsed.netloc != "item.rakuten.co.jp":
+        raise ValueError(f"楽天市場の商品ページURLではありません: {url}")
+    parts = [p for p in parsed.path.split("/") if p]
+    if len(parts) < 2:
+        raise ValueError(f"商品URLの形式が正しくありません: {url}")
+    return f"{parts[0]}:{parts[1]}"

@@ -1,5 +1,7 @@
 # sns-affiliate
 
+> 🔰 **はじめての方は [GUIDE.md（はじめてガイド）](GUIDE.md) から読んでください。** 登録から運用までを順番に説明しています。
+
 Instagram × 楽天アフィリエイトの**自動投稿パイプライン**です。
 毎日、楽天市場から商品を選び、Claude で投稿文を書き、投稿画像を作って Instagram に公開します。
 購入ページへのリンクは、プロフィールに置く一覧ページから開いてもらいます。
@@ -20,6 +22,17 @@ Instagram × 楽天アフィリエイトの**自動投稿パイプライン**で
 **収益が発生する流れ**: 投稿を見る → プロフィールのリンクを開く → 投稿番号（例 `#012`）の商品をタップ → 楽天で購入 → 楽天アフィリエイト報酬
 
 Instagram のキャプションに貼ったリンクはタップできません。そのため投稿画像とキャプションに番号を入れ、プロフィールの一覧ページ（`docs/index.html`）から購入ページへ移動してもらいます。
+
+## 2種類の投稿
+
+| | 自分の写真モード（おすすめ） | 自動モード |
+|---|---|---|
+| きっかけ | `inbox/` に写真と `memo.txt`（楽天URL＋感想）を置く | `inbox/` が空の日に自動で切り替わる |
+| 画像 | カルーセル: 写真の表紙＋使用写真（テロップ付き）＋ポイントまとめ（最大10枚） | 文字カード1枚 |
+| 文章 | 本人の感想を元に Claude が体験談つきで作る。Claude は写真も見てテロップを付ける | 事実（価格・レビュー件数）だけで紹介する |
+| 役割 | **売上の本命** | 毎日の更新を途切れさせない |
+
+置き方は [inbox/README.txt](inbox/README.txt) を参照してください。
 
 ## ジャンル
 
@@ -84,7 +97,8 @@ pip install -r requirements.txt
 export PYTHONPATH=src
 
 python -m sns_affiliate demo                     # API キーなしでサンプル画像を作る → data/demo.jpg
-python -m sns_affiliate prepare --genre gadget   # 商品選定・投稿文・画像を作る（楽天と Claude のキーが必要）
+python -m sns_affiliate prepare                  # inbox に写真があればそれを、なければ自動選定で投稿を作る
+python -m sns_affiliate prepare --no-inbox --genre gadget  # 自動モードでジャンル指定
 python -m sns_affiliate publish                  # 準備済みの投稿を Instagram に公開する
 python -m sns_affiliate insights                 # インサイトを取得して CSV に出力する
 python -m sns_affiliate site                     # 一覧ページを作り直す
@@ -100,7 +114,8 @@ python -m pytest -q                              # テスト
 ## 法令・規約で守っていること（必ず読んでください）
 
 - **ステマ規制（景品表示法）**: キャプションの冒頭に `【PR】`、ハッシュタグに `#PR`、画像に「PR」ラベル、一覧ページに広告表記を自動で入れます。消さないでください
-- **体験談を作らない**: Claude には、商品情報にない効果や「使ってみた」系の体験談を書かないよう指示しています。実際に使った商品は、自分の感想を足すと反応が上がります
+- **体験談を作らない**: 体験談は `memo.txt` に本人が書いた感想だけを元にします。感想がない投稿では体験談を書かないよう Claude に指示しています
+- **写真の位置情報**: 投稿用の画像は位置情報などのメタデータを含まない形で書き出し、使い終わった元の写真は削除します。ただし公開リポジトリにアップロードした時点で履歴には残るため、撮影時にカメラの位置情報をオフにしてください
 - **投資ジャンル**: 銘柄の推奨、利益の保証、断定的な予想を禁止し、「学ぶための本」として紹介するように指示しています（金融商品取引法への配慮）
 - **商品画像**: 既定では商品画像を使わず、文字だけのカードを作ります。商品画像を使う場合は、楽天アフィリエイトの規約とショップの画像の権利を確認したうえで `USE_PRODUCT_IMAGE=true` にしてください
 - **Instagram の規約**: 自動投稿は公式の Content Publishing API で行います。投稿は24時間で100件までという API の上限がありますが、このツールは1日1件です。いいねやフォローの自動化はしません（規約違反でアカウント停止の対象になります）
@@ -118,6 +133,7 @@ python -m pytest -q                              # テスト
 ```
 config/genres.json          ジャンル定義（キーワード・ハッシュタグ・配色）
 src/sns_affiliate/
+  inbox.py                  自分の写真（inbox/）の読み込み
   rakuten.py                楽天市場商品検索API
   caption.py                Claude による投稿文生成（構造化出力）
   image_card.py             投稿画像の生成（Pillow）
@@ -125,6 +141,7 @@ src/sns_affiliate/
   instagram.py              Instagram への投稿・インサイト取得・トークン更新
   pipeline.py               全体の流れ
   __main__.py               CLI
+inbox/                      自分で撮った写真と memo.txt を置く場所
 data/posts.json             投稿履歴（自動更新）
 data/insights.csv           インサイト（自動更新）
 docs/                       GitHub Pages（一覧ページと画像）

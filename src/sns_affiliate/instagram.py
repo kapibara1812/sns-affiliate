@@ -31,22 +31,34 @@ class InstagramClient:
             raise InstagramError(f"{method} {path} failed: {data.get('error', resp.text)}")
         return data
 
-    def publish_image(self, image_url: str, caption: str) -> dict:
-        """画像1枚を投稿し {id, permalink} を返す."""
-        container = self._request("POST", f"{self.s.ig_user_id}/media",
-                                  image_url=image_url, caption=caption)
-        container_id = container["id"]
-
+    def _wait_ready(self, container_id: str) -> None:
         for _ in range(60):  # 最大5分待つ
             status = self._request("GET", container_id, fields="status_code,status")
             code = status.get("status_code")
             if code == "FINISHED":
-                break
+                return
             if code in {"ERROR", "EXPIRED"}:
                 raise InstagramError(f"コンテナ処理に失敗: {status}")
             time.sleep(self.poll_interval)
+        raise InstagramError("コンテナ処理がタイムアウトしました")
+
+    def publish(self, image_urls: list[str], caption: str) -> dict:
+        """画像1枚なら通常投稿、2〜10枚ならカルーセル投稿。{id, permalink} を返す."""
+        if not 1 <= len(image_urls) <= 10:
+            raise InstagramError("画像は1〜10枚にしてください")
+        if len(image_urls) == 1:
+            container_id = self._request("POST", f"{self.s.ig_user_id}/media",
+                                         image_url=image_urls[0], caption=caption)["id"]
         else:
-            raise InstagramError("コンテナ処理がタイムアウトしました")
+            children = []
+            for url in image_urls:
+                child = self._request("POST", f"{self.s.ig_user_id}/media",
+                                      image_url=url, is_carousel_item="true")["id"]
+                self._wait_ready(child)
+                children.append(child)
+            container_id = self._request("POST", f"{self.s.ig_user_id}/media", media_type="CAROUSEL",
+                                         children=",".join(children), caption=caption)["id"]
+        self._wait_ready(container_id)
 
         media = self._request("POST", f"{self.s.ig_user_id}/media_publish", creation_id=container_id)
         media_id = media["id"]

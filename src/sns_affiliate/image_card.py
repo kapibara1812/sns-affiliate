@@ -201,3 +201,88 @@ def render_card(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     img.save(out_path, "JPEG", quality=90)
     return out_path
+
+
+# ---------------------------------------------------------------------------
+# 自分で撮った写真を使うスライド
+# ---------------------------------------------------------------------------
+
+def _load_photo(path: Path) -> Image.Image:
+    from PIL import ImageOps
+
+    img = Image.open(path)
+    img = ImageOps.exif_transpose(img)  # スマホ写真の向きを補正
+    return img.convert("RGB")
+
+
+def _cover_crop(img: Image.Image) -> Image.Image:
+    """4:5 に中央トリミングして 1080x1350 にする."""
+    from PIL import ImageOps
+
+    return ImageOps.fit(img, (WIDTH, HEIGHT), method=Image.LANCZOS, centering=(0.5, 0.45))
+
+
+def _bottom_gradient(img: Image.Image, start: int, color=(0, 0, 0), max_alpha: int = 215) -> None:
+    overlay = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
+    od = ImageDraw.Draw(overlay)
+    for y in range(start, HEIGHT):
+        a = int(max_alpha * min(1.0, (y - start) / max(1, (HEIGHT - start) * 0.6)))
+        od.line((0, y, WIDTH, y), fill=(*color, a))
+    img.paste(Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB"))
+
+
+def render_photo_cover(*, photo: Path, out_path: Path, number: int, genre: dict, headline: str,
+                       short_name: str) -> Path:
+    """1枚目: 自分の写真に見出しを重ねた表紙."""
+    img = _cover_crop(_load_photo(photo))
+    accent = _hex(genre.get("accent", "#facc15"))
+    white = (255, 255, 255)
+    _bottom_gradient(img, HEIGHT - 620)
+    draw = ImageDraw.Draw(img)
+
+    # PR ラベルと番号（写真の上でも読めるよう半透明の座布団を敷く）
+    draw.rounded_rectangle((MARGIN - 16, 44, MARGIN + 260, 128), radius=20, fill=(0, 0, 0))
+    draw.rounded_rectangle((MARGIN, 60, MARGIN + 92, 112), radius=10, fill=white)
+    draw.text((MARGIN + 46, 86), "PR", font=_font("bold", 34), fill=(0, 0, 0), anchor="mm")
+    draw.text((MARGIN + 116, 86), f"#{number:03d}", font=_font("bold", 40), fill=white, anchor="lm")
+
+    content_w = WIDTH - MARGIN * 2
+    size, lines = 64, [headline]
+    for s in range(96, 63, -4):
+        f = _font("bold", s)
+        ls = _wrap(draw, headline, f, content_w, 3)
+        if len(ls) <= 2 and "…" not in ls[-1]:
+            size, lines = s, _balance(draw, headline, f, ls)
+            break
+    else:
+        lines = _wrap(draw, headline, _font("bold", size), content_w, 2)
+    font = _font("bold", size)
+    lh = int(size * 1.3)
+
+    y = HEIGHT - 150 - lh * len(lines)
+    draw.line((MARGIN, y - 36, MARGIN + 120, y - 36), fill=accent, width=6)
+    for line in lines:
+        draw.text((MARGIN, y), line, font=font, fill=white)
+        y += lh
+    name = _wrap(draw, short_name, _font("regular", 38), content_w, 1)
+    if name:
+        draw.text((MARGIN, y + 16), name[0], font=_font("regular", 38), fill=(226, 232, 240))
+    draw.text((WIDTH - MARGIN, HEIGHT - 40), "スワイプ →", font=_font("bold", 32), fill=accent, anchor="rs")
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    img.save(out_path, "JPEG", quality=90)
+    return out_path
+
+
+def render_photo_slide(*, photo: Path, out_path: Path, caption: str = "") -> Path:
+    """2枚目以降: 写真をそのまま（任意で一言テロップ）."""
+    img = _cover_crop(_load_photo(photo))
+    if caption:
+        _bottom_gradient(img, HEIGHT - 320, max_alpha=190)
+        draw = ImageDraw.Draw(img)
+        f = _font("bold", 52)
+        for i, line in enumerate(_wrap(draw, caption, f, WIDTH - MARGIN * 2, 2)):
+            draw.text((MARGIN, HEIGHT - 200 + i * 68), line, font=f, fill=(255, 255, 255))
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    img.save(out_path, "JPEG", quality=90)
+    return out_path
