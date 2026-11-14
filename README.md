@@ -23,16 +23,20 @@ Instagram × 楽天アフィリエイトの**自動投稿パイプライン**で
 
 Instagram のキャプションに貼ったリンクはタップできません。そのため投稿画像とキャプションに番号を入れ、プロフィールの一覧ページ（`docs/index.html`）から購入ページへ移動してもらいます。
 
-## 2種類の投稿
+## 投稿の種類
 
-| | 自分の写真モード（おすすめ） | 自動モード |
-|---|---|---|
-| きっかけ | `inbox/` に写真と `memo.txt`（楽天URL＋感想）を置く | `inbox/` が空の日に自動で切り替わる |
-| 画像 | カルーセル: 写真の表紙＋使用写真（テロップ付き）＋ポイントまとめ（最大10枚） | 文字カード1枚 |
-| 文章 | 本人の感想を元に Claude が体験談つきで作る。Claude は写真も見てテロップを付ける | 事実（価格・レビュー件数）だけで紹介する |
-| 役割 | **売上の本命** | 毎日の更新を途切れさせない |
+毎日1件、次の優先順位で投稿を作ります。
 
-置き方は [inbox/README.txt](inbox/README.txt) を参照してください。
+| 優先 | きっかけ | 投稿の形 | 文章 |
+|---|---|---|---|
+| 1 | `inbox/` に**URL1つ＋写真** | 写真カルーセル（写真の表紙 → 使用写真＋テロップ → ポイントまとめ） | 本人の感想を元にした体験談。Claude は写真も見てテロップを付ける |
+| 1 | `inbox/` に**URL1つだけ** | 文字カード1枚 | 事実（価格・レビュー件数）だけで紹介する |
+| 1 | `inbox/` に**URL2〜8つ** | まとめ・比較カルーセル（表紙 → 商品ごとのスライド → 比較表） | 事実だけ。どんな人に向いているかで書き分ける |
+| 2 | `inbox/` が空・**まとめ曜日**（初期設定は水・土） | まとめ・比較カルーセル（人気商品5件・1ショップ1件・価格の安い順） | 同上 |
+| 3 | `inbox/` が空・それ以外の日 | 文字カード1枚（人気商品を自動で選ぶ） | 同上 |
+
+まとめ投稿では、一覧ページに商品ごとの番号（`#012-1`, `#012-2` …）が付きます。
+置き方は [inbox/README.txt](inbox/README.txt) を参照してください。まとめ投稿の曜日と件数は、Variables の `ROUNDUP_WEEKDAYS`（例 `3,6`。1=月 … 7=日）と `ROUNDUP_SIZE`（既定 5）で変えられます。
 
 ## ジャンル
 
@@ -98,7 +102,8 @@ export PYTHONPATH=src
 
 python -m sns_affiliate demo                     # API キーなしでサンプル画像を作る → data/demo.jpg
 python -m sns_affiliate prepare                  # inbox に写真があればそれを、なければ自動選定で投稿を作る
-python -m sns_affiliate prepare --no-inbox --genre gadget  # 自動モードでジャンル指定
+python -m sns_affiliate prepare --no-inbox --mode roundup --genre travel  # inbox を使わず、まとめ投稿を作る
+python -m sns_affiliate demo --roundup           # まとめ投稿のサンプル画像 → data/demo/
 python -m sns_affiliate publish                  # 準備済みの投稿を Instagram に公開する
 python -m sns_affiliate insights                 # インサイトを取得して CSV に出力する
 python -m sns_affiliate site                     # 一覧ページを作り直す

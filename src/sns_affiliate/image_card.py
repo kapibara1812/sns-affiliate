@@ -286,3 +286,187 @@ def render_photo_slide(*, photo: Path, out_path: Path, caption: str = "") -> Pat
     out_path.parent.mkdir(parents=True, exist_ok=True)
     img.save(out_path, "JPEG", quality=90)
     return out_path
+
+
+# ---------------------------------------------------------------------------
+# まとめ・比較投稿のスライド
+# ---------------------------------------------------------------------------
+
+CIRCLED = "①②③④⑤⑥⑦⑧⑨⑩"
+
+
+def _header(draw: ImageDraw.ImageDraw, genre: dict, number: int, bg, right: str | None = None) -> None:
+    accent = _hex(genre.get("accent", "#facc15"))
+    draw.rounded_rectangle((MARGIN, 60, MARGIN + 92, 112), radius=10, fill=(255, 255, 255))
+    draw.text((MARGIN + 46, 86), "PR", font=_font("bold", 34), fill=bg, anchor="mm")
+    draw.text((MARGIN + 116, 86), genre["label"], font=_font("bold", 34), fill=accent, anchor="lm")
+    draw.text((WIDTH - MARGIN, 86), right or f"#{number:03d}", font=_font("bold", 44),
+              fill=(255, 255, 255), anchor="rm")
+
+
+def _fit_lines(draw, text: str, weight: str, sizes: range, width: int, max_lines: int):
+    for size in sizes:
+        f = _font(weight, size)
+        lines = _wrap(draw, text, f, width, max_lines + 1)
+        if len(lines) <= max_lines and "…" not in lines[-1]:
+            return f, _balance(draw, text, f, lines)
+    f = _font(weight, sizes[-1])
+    return f, _wrap(draw, text, f, width, max_lines)
+
+
+def _save(img: Image.Image, out_path: Path) -> Path:
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    img.save(out_path, "JPEG", quality=90)
+    return out_path
+
+
+def render_roundup_cover(*, out_path: Path, number: int, genre: dict, title: str, subtitle: str,
+                         names: list[str], account_name: str = "") -> Path:
+    bg = _hex(genre.get("color", "#1f2937"))
+    accent = _hex(genre.get("accent", "#facc15"))
+    white, muted = (255, 255, 255), (226, 232, 240)
+    img = Image.new("RGB", (WIDTH, HEIGHT), bg)
+    draw = ImageDraw.Draw(img)
+    _header(draw, genre, number, bg)
+    w = WIDTH - MARGIN * 2
+
+    # 「N選」バッジ
+    draw.rounded_rectangle((MARGIN, 190, MARGIN + 250, 262), radius=36, fill=accent)
+    draw.text((MARGIN + 125, 226), f"保存版 {len(names)}選", font=_font("bold", 38), fill=bg, anchor="mm")
+
+    font, lines = _fit_lines(draw, title, "bold", range(104, 63, -4), w, 3)
+    y = 300
+    for line in lines:
+        draw.text((MARGIN, y), line, font=font, fill=white)
+        y += int(font.size * 1.28)
+    sub_font, sub = _fit_lines(draw, subtitle, "regular", range(44, 31, -2), w, 2)
+    y += 16
+    for line in sub:
+        draw.text((MARGIN, y), line, font=sub_font, fill=muted)
+        y += int(sub_font.size * 1.4)
+
+    # 目次
+    y = max(y + 40, 820)
+    row_h = min(70, (HEIGHT - 150 - y) // max(1, len(names)))
+    list_font = _font("regular", min(38, row_h - 22))
+    draw.line((MARGIN, y - 20, WIDTH - MARGIN, y - 20), fill=accent, width=3)
+    for i, name in enumerate(names):
+        t = _wrap(draw, name, list_font, w - 70, 1)
+        draw.text((MARGIN, y), CIRCLED[i], font=list_font, fill=accent)
+        draw.text((MARGIN + 60, y), t[0] if t else "", font=list_font, fill=white)
+        y += row_h
+    draw.text((WIDTH - MARGIN, HEIGHT - 50), "スワイプ →", font=_font("bold", 36), fill=accent, anchor="rs")
+    if account_name:
+        draw.text((MARGIN, HEIGHT - 50), f"@{account_name}", font=_font("regular", 28), fill=muted, anchor="ls")
+    return _save(img, out_path)
+
+
+def render_roundup_item(*, out_path: Path, number: int, genre: dict, index: int, total: int,
+                        short_name: str, best_for: str, points: list[str], price: int,
+                        review_average: float, review_count: int,
+                        product_image_url: str | None = None) -> Path:
+    bg = _hex(genre.get("color", "#1f2937"))
+    accent = _hex(genre.get("accent", "#facc15"))
+    white, muted = (255, 255, 255), (226, 232, 240)
+    img = Image.new("RGB", (WIDTH, HEIGHT), bg)
+    draw = ImageDraw.Draw(img)
+    _header(draw, genre, number, bg, right=f"{index} / {total}")
+    w = WIDTH - MARGIN * 2
+
+    # 番号の丸 + 商品名
+    draw.ellipse((MARGIN, 170, MARGIN + 120, 290), fill=accent)
+    draw.text((MARGIN + 60, 230), str(index), font=_font("bold", 72), fill=bg, anchor="mm")
+    name_font, name_lines = _fit_lines(draw, short_name, "bold", range(68, 43, -4), w - 150, 2)
+    lh = int(name_font.size * 1.25)
+    ny = 230 - lh * len(name_lines) // 2
+    for line in name_lines:
+        draw.text((MARGIN + 150, ny), line, font=name_font, fill=white)
+        ny += lh
+    y = 340
+
+    product = _fetch_image(product_image_url) if product_image_url else None
+    if product is not None:
+        box = 400
+        product.thumbnail((box, box))
+        draw.rounded_rectangle((MARGIN, y, WIDTH - MARGIN, y + box + 40), radius=28, fill=white)
+        img.paste(product, ((WIDTH - product.width) // 2, y + 20 + (box - product.height) // 2))
+        y += box + 80
+    else:
+        y += 60
+
+    pf = _font("bold", 58 if product is None else 44)
+    bf_font = _font("bold", 46 if product is None else 42)
+    point_lines = [_wrap(draw, pt, pf, w - 56, 2) for pt in points[:2]]
+    if product is None:  # 中央ブロック（向いている人 + 特徴）を上下中央に置く
+        block_h = (150 if best_for else 0) + sum(len(ls) * int(pf.size * 1.35) + 36 for ls in point_lines)
+        y = max(y, y + (HEIGHT - 300 - y - block_h) // 2)
+
+    if best_for:
+        t = _wrap(draw, best_for, bf_font, w - 60, 1)[0]
+        tw = draw.textlength(t, font=bf_font)
+        draw.rounded_rectangle((MARGIN, y, MARGIN + tw + 64, y + 84), radius=42, outline=accent, width=4)
+        draw.text((MARGIN + 32, y + 42), t, font=bf_font, fill=accent, anchor="lm")
+        y += 150
+
+    for lines in point_lines:
+        for j, line in enumerate(lines):
+            if j == 0:
+                r = pf.size // 3
+                cy = y + pf.size // 2 + 6
+                draw.ellipse((MARGIN, cy - r, MARGIN + 2 * r, cy + r), fill=accent)
+            draw.text((MARGIN + 56, y), line, font=pf, fill=white)
+            y += int(pf.size * 1.35)
+        y += 36
+
+    footer_top = HEIGHT - 270
+    draw.line((MARGIN, footer_top, WIDTH - MARGIN, footer_top), fill=accent, width=3)
+    draw.text((MARGIN, footer_top + 30), f"¥{price:,}", font=_font("bold", 64), fill=accent)
+    if review_count:
+        draw.text((WIDTH - MARGIN, footer_top + 64), f"★{review_average:.1f}（{review_count:,}件）",
+                  font=_font("regular", 38), fill=white, anchor="rm")
+    draw.rounded_rectangle((MARGIN, footer_top + 120, WIDTH - MARGIN, footer_top + 190), radius=35, fill=accent)
+    draw.text((WIDTH // 2, footer_top + 155), f"購入はプロフィールのリンク → #{number:03d}-{index}",
+              font=_font("bold", 36), fill=bg, anchor="mm")
+    draw.text((MARGIN, HEIGHT - 36), "※価格は投稿時点のものです", font=_font("regular", 24), fill=muted, anchor="ls")
+    return _save(img, out_path)
+
+
+def render_roundup_summary(*, out_path: Path, number: int, genre: dict, rows: list[dict]) -> Path:
+    """最後のスライド: 価格・評価の比較表（保存されやすい）."""
+    bg = _hex(genre.get("color", "#1f2937"))
+    accent = _hex(genre.get("accent", "#facc15"))
+    white, muted = (255, 255, 255), (203, 213, 225)
+    img = Image.new("RGB", (WIDTH, HEIGHT), bg)
+    draw = ImageDraw.Draw(img)
+    _header(draw, genre, number, bg)
+    draw.text((MARGIN, 170), "ひと目で比較", font=_font("bold", 76), fill=white)
+    draw.text((MARGIN, 280), "保存しておくと買い物のときに便利です", font=_font("regular", 34), fill=muted)
+
+    top, bottom = 370, HEIGHT - 250
+    row_h = min(150, (bottom - top) // max(1, len(rows)))
+    name_f, sub_f = _font("bold", min(42, row_h // 3)), _font("regular", min(32, row_h // 4))
+    price_f = _font("bold", min(44, row_h // 3))
+    y = top
+    for i, r in enumerate(rows):
+        draw.line((MARGIN, y, WIDTH - MARGIN, y), fill=(255, 255, 255, 60), width=1)
+        cy = y + row_h // 2
+        draw.text((MARGIN, cy), CIRCLED[i], font=price_f, fill=accent, anchor="lm")
+        name = _wrap(draw, r["short_name"], name_f, 560, 1)
+        draw.text((MARGIN + 70, cy - 4), name[0] if name else "", font=name_f, fill=white, anchor="ls")
+        if r.get("best_for"):
+            bf = _wrap(draw, r["best_for"], sub_f, 560, 1)
+            draw.text((MARGIN + 70, cy + 10), bf[0] if bf else "", font=sub_f, fill=muted, anchor="lt")
+        draw.text((WIDTH - MARGIN, cy - 4), f"¥{r['price']:,}", font=price_f, fill=accent, anchor="rs")
+        if r.get("review_count"):
+            draw.text((WIDTH - MARGIN, cy + 10), f"★{r['review_average']:.1f}（{r['review_count']:,}）",
+                      font=sub_f, fill=muted, anchor="rt")
+        y += row_h
+    draw.line((MARGIN, y, WIDTH - MARGIN, y), fill=accent, width=3)
+
+    footer_top = HEIGHT - 230
+    draw.rounded_rectangle((MARGIN, footer_top + 50, WIDTH - MARGIN, footer_top + 130), radius=40, fill=accent)
+    draw.text((WIDTH // 2, footer_top + 90), f"購入はプロフィールのリンク → #{number:03d}",
+              font=_font("bold", 40), fill=bg, anchor="mm")
+    draw.text((MARGIN, HEIGHT - 36), "※価格・評価は投稿時点のものです", font=_font("regular", 24),
+              fill=muted, anchor="ls")
+    return _save(img, out_path)

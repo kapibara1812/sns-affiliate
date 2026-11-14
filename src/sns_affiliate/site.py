@@ -9,7 +9,7 @@ from __future__ import annotations
 from html import escape
 from pathlib import Path
 
-from . import config
+from . import config, storage
 
 PAGE = """<!doctype html>
 <html lang="ja">
@@ -85,7 +85,7 @@ a.item img {{ width:84px; height:105px; object-fit:cover; border-radius:8px; fle
 
 ITEM = """<a class="item" href="{url}" target="_blank" rel="sponsored noopener" data-num="{num}" data-genre="{genre}" data-text="{text}">
   <img src="{img}" alt="" loading="lazy">
-  <div><div class="num">#{num3} ・ {genre_label}</div><div class="name">{name}</div><div class="meta">¥{price:,}</div></div>
+  <div><div class="num">#{num3} ・ {genre_label}</div><div class="name">{name}</div><div class="meta">{meta}</div></div>
   <span class="cta">楽天で見る</span>
 </a>"""
 
@@ -99,20 +99,27 @@ def build_site(posts: list[dict], genres: list[dict], title: str, out_dir: Path 
         f'<button class="chip" type="button" aria-pressed="false" data-genre="{escape(g["id"])}">{escape(g["label"])}</button>'
         for g in genres
     )
-    items = "\n".join(
-        ITEM.format(
-            url=escape(p["affiliate_url"]),
-            num=p["number"],
-            num3=f"{p['number']:03d}",
-            genre=escape(p["genre"]),
-            genre_label=escape(labels.get(p["genre"], p["genre"])),
-            text=escape(f"{p.get('short_name', '')} {p['item_name']}".lower()),
-            img=escape(f"images/{Path(p['image_path']).name}"),
-            name=escape(p.get("short_name") or p["item_name"]),
-            price=p["price"],
-        )
-        for p in visible
-    )
+    rows = []
+    for p in visible:
+        items = storage.post_items(p)
+        roundup = p.get("kind") == "roundup"
+        for i, it in enumerate(items, start=1):
+            label = f"{p['number']:03d}-{i}" if roundup else f"{p['number']:03d}"
+            meta = f"¥{it['price']:,}"
+            if roundup and p.get("title"):
+                meta += f" ・ {p['title']}"
+            rows.append(ITEM.format(
+                url=escape(it["affiliate_url"]),
+                num=p["number"],
+                num3=escape(label),
+                genre=escape(p["genre"]),
+                genre_label=escape(labels.get(p["genre"], p["genre"])),
+                text=escape(f"{label} {it.get('short_name') or ''} {it['item_name']} {p.get('title', '')}".lower()),
+                img=escape(f"images/{Path(it.get('image') or p['image_path']).name}"),
+                name=escape(it.get("short_name") or it["item_name"]),
+                meta=escape(meta),
+            ))
+    items = "\n".join(rows)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / ".nojekyll").touch()
     out = out_dir / "index.html"

@@ -11,8 +11,9 @@ from pathlib import Path
 import requests
 
 from . import config, inbox, storage
-from .caption import CaptionGenerator, compose_caption
-from .image_card import render_card, render_photo_cover, render_photo_slide
+from .caption import CaptionGenerator, compose_caption, compose_roundup_caption
+from .image_card import (render_card, render_photo_cover, render_photo_slide, render_roundup_cover,
+                         render_roundup_item, render_roundup_summary)
 from .instagram import InstagramClient
 from .rakuten import Item, RakutenClient, item_code_from_url
 from .site import build_site
@@ -42,68 +43,115 @@ def choose_item(items: list[Item], exclude: set[str], settings: config.Settings,
     return rng.choice(candidates[:5])
 
 
+def is_roundup_day(settings: config.Settings, today: datetime | None = None) -> bool:
+    today = today or datetime.now(storage.JST)
+    days = {int(d) for d in settings.roundup_weekdays.replace(" ", "").split(",") if d}
+    return today.isoweekday() in days
+
+
 def prepare(settings: config.Settings, *, genre_id: str | None = None, use_inbox: bool = True,
-            rakuten: RakutenClient | None = None, writer: CaptionGenerator | None = None,
+            mode: str = "auto", rakuten: RakutenClient | None = None, writer: CaptionGenerator | None = None,
             rng: random.Random | None = None, inbox_dir: Path | None = None) -> dict:
     """次の投稿を1件準備し、posts.json と一覧ページを更新する.
 
-    inbox/ に自分で撮った写真があればそれを優先してカルーセル投稿を作る。
-    なければ楽天から商品を自動で選び、文字カード1枚の投稿を作る。
+    優先順位:
+      1. inbox/ に置かれたネタ（写真カルーセル / 指定商品の単品 / 指定商品のまとめ）
+      2. 自動選定（mode="roundup" か まとめ曜日ならまとめ投稿、それ以外は単品）
     """
+    if mode not in {"auto", "single", "roundup"}:
+        raise ValueError(f"mode は auto / single / roundup のいずれかです: {mode}")
     rng = rng or random.Random()
     genres = config.load_genres()
     posts = storage.load_posts()
     number = storage.next_number(posts)
     rakuten = rakuten or RakutenClient(settings)
     writer = writer or CaptionGenerator(settings.claude_model)
+    exclude = storage.recently_posted_codes(posts, settings.repost_cooldown_days)
 
     entries = inbox.list_entries(inbox_dir) if use_inbox else []
     entry = entries[0] if entries else None
     if entry:
-        item = rakuten.lookup(item_code_from_url(entry.url))
-        if item is None:
-            raise RuntimeError(f"inbox/{entry.name}: 楽天で商品が見つかりません（URLを確認してください）: {entry.url}")
         genre = pick_genre(genres, number, genre_id or entry.genre_id)
-        comment, photos = entry.comment, entry.photos
+        items = [_lookup(rakuten, url, entry.name) for url in entry.urls]
+        if entry.is_roundup:
+            post = _build_roundup(settings, writer, number, genre, items, entry.theme or genre["label"] + "のおすすめ",
+                                  entry.comment, source="pick")
+        else:
+            post = _build_single(settings, writer, number, genre, items[0], entry.comment, entry.photos,
+                                 source="photo" if entry.photos else "pick")
     else:
         genre = pick_genre(genres, number, genre_id)
-        item = find_item(rakuten, genre, storage.recently_posted_codes(posts, settings.repost_cooldown_days),
-                         settings, rng)
-        comment, photos = "", []
+        roundup = mode == "roundup" or (mode == "auto" and is_roundup_day(settings))
+        if roundup:
+            items, keyword = find_items(rakuten, genre, exclude, settings, rng, settings.roundup_size)
+            post = _build_roundup(settings, writer, number, genre, items, keyword, "", source="auto")
+        else:
+            item = find_item(rakuten, genre, exclude, settings, rng)
+            post = _build_single(settings, writer, number, genre, item, "", [], source="auto")
 
-    copy = writer.generate(item, genre, number, comment, photos)
+    posts.append(post)
+    storage.save_posts(posts)
+    if entry:
+        inbox.mark_used(entry, number)
+    build_site(posts, genres, settings.site_title)
+    return post
 
-    card_kwargs = dict(number=number, genre=genre, headline=copy.headline, short_name=copy.short_name,
-                       points=copy.points, price=item.price, review_average=item.review_average,
-                       review_count=item.review_count, account_name=settings.account_name)
-    images: list[Path] = []
-    if photos:
-        out = lambda i: config.IMAGES_DIR / f"{number:04d}-{i:02d}.jpg"  # noqa: E731
-        images.append(render_photo_cover(photo=photos[0], out_path=out(1), number=number, genre=genre,
-                                         headline=copy.headline, short_name=copy.short_name))
-        for i, (photo, telop) in enumerate(zip(photos[1:], copy.slide_captions), start=2):
-            images.append(render_photo_slide(photo=photo, out_path=out(i), caption=telop))
-        images.append(render_card(out_path=out(len(images) + 1), **card_kwargs))
-    else:
-        images.append(render_card(
-            out_path=config.IMAGES_DIR / f"{number:04d}.jpg",
-            product_image_url=item.image_url if settings.use_product_image else None,
-            **card_kwargs,
-        ))
 
-    rel = [str(p.relative_to(config.ROOT)) for p in images]
-    post = {
-        "number": number,
-        "genre": genre["id"],
-        "source": "photo" if photos else "auto",
+def _lookup(rakuten: RakutenClient, url: str, entry_name: str) -> Item:
+    try:
+        item = rakuten.lookup(item_code_from_url(url))
+    except ValueError as e:
+        raise RuntimeError(f"inbox/{entry_name}: {e}") from e
+    if item is None:
+        raise RuntimeError(f"inbox/{entry_name}: 楽天で商品が見つかりません（URLを確認してください）: {url}")
+    time.sleep(1.1)  # 楽天APIのレート制限対策
+    return item
+
+
+def _item_record(item: Item, short_name: str, image: Path) -> dict:
+    return {
         "item_code": item.item_code,
         "item_name": item.name,
-        "short_name": copy.short_name,
+        "short_name": short_name,
         "price": item.price,
         "review_average": item.review_average,
         "review_count": item.review_count,
         "item_url": item.item_url,
         "affiliate_url": item.affiliate_url,
+        "image": str(image.relative_to(config.ROOT)),
+    }
+
+
+def _out(number: int, i: int | None = None) -> Path:
+    name = f"{number:04d}.jpg" if i is None else f"{number:04d}-{i:02d}.jpg"
+    return config.IMAGES_DIR / name
+
+
+def _build_single(settings: config.Settings, writer: CaptionGenerator, number: int, genre: dict, item: Item,
+                  comment: str, photos: list[Path], source: str) -> dict:
+    copy = writer.generate(item, genre, number, comment, photos)
+    card_kwargs = dict(number=number, genre=genre, headline=copy.headline, short_name=copy.short_name,
+                       points=copy.points, price=item.price, review_average=item.review_average,
+                       review_count=item.review_count, account_name=settings.account_name)
+    images: list[Path] = []
+    if photos:
+        images.append(render_photo_cover(photo=photos[0], out_path=_out(number, 1), number=number, genre=genre,
+                                         headline=copy.headline, short_name=copy.short_name))
+        for i, (photo, telop) in enumerate(zip(photos[1:], copy.slide_captions), start=2):
+            images.append(render_photo_slide(photo=photo, out_path=_out(number, i), caption=telop))
+        images.append(render_card(out_path=_out(number, len(images) + 1), **card_kwargs))
+    else:
+        images.append(render_card(out_path=_out(number),
+                                  product_image_url=item.image_url if settings.use_product_image else None,
+                                  **card_kwargs))
+    record = _item_record(item, copy.short_name, images[0])
+    rel = [str(p.relative_to(config.ROOT)) for p in images]
+    return {
+        "number": number,
+        "kind": "single",
+        "genre": genre["id"],
+        "source": source,
+        **{k: v for k, v in record.items() if k != "image"},
         "image_path": rel[0],
         "images": rel,
         "headline": copy.headline,
@@ -112,12 +160,53 @@ def prepare(settings: config.Settings, *, genre_id: str | None = None, use_inbox
         "status": "prepared",
         "created_at": storage.now_iso(),
     }
-    posts.append(post)
-    storage.save_posts(posts)
-    if entry:
-        inbox.mark_used(entry, number)
-    build_site(posts, genres, settings.site_title)
-    return post
+
+
+def _build_roundup(settings: config.Settings, writer: CaptionGenerator, number: int, genre: dict,
+                   items: list[Item], theme: str, comment: str, source: str) -> dict:
+    copy = writer.generate_roundup(items, genre, number, theme, comment)
+    images = [render_roundup_cover(out_path=_out(number, 1), number=number, genre=genre, title=copy.title,
+                                   subtitle=copy.subtitle, names=[c.short_name for c in copy.items],
+                                   account_name=settings.account_name)]
+    records = []
+    for i, (item, c) in enumerate(zip(items, copy.items), start=1):
+        path = render_roundup_item(
+            out_path=_out(number, i + 1), number=number, genre=genre, index=i, total=len(items),
+            short_name=c.short_name, best_for=c.best_for, points=c.points, price=item.price,
+            review_average=item.review_average, review_count=item.review_count,
+            product_image_url=item.image_url if settings.use_product_image else None,
+        )
+        images.append(path)
+        records.append(_item_record(item, c.short_name, path) | {"best_for": c.best_for})
+    images.append(render_roundup_summary(out_path=_out(number, len(images) + 1), number=number, genre=genre,
+                                         rows=records))
+    rel = [str(p.relative_to(config.ROOT)) for p in images]
+    return {
+        "number": number,
+        "kind": "roundup",
+        "genre": genre["id"],
+        "source": source,
+        "title": copy.title,
+        "theme": theme,
+        "items": records,
+        "image_path": rel[0],
+        "images": rel,
+        "caption": compose_roundup_caption(copy, items, number),
+        "status": "prepared",
+        "created_at": storage.now_iso(),
+    }
+
+
+def _candidates(items: list[Item], exclude: set[str], settings: config.Settings) -> list[Item]:
+    seen: set[str] = set()
+    out = []
+    for it in sorted(items, key=lambda it: it.review_count * it.review_average, reverse=True):
+        if (it.item_code in exclude or it.item_code in seen
+                or it.review_count < settings.min_review_count or it.review_average < settings.min_review_average):
+            continue
+        seen.add(it.item_code)
+        out.append(it)
+    return out
 
 
 def find_item(rakuten: RakutenClient, genre: dict, exclude: set[str], settings: config.Settings,
@@ -130,6 +219,34 @@ def find_item(rakuten: RakutenClient, genre: dict, exclude: set[str], settings: 
             return item
         time.sleep(1.1)  # 楽天APIのレート制限対策
     raise RuntimeError(f"{genre['label']} で条件に合う商品が見つかりませんでした")
+
+
+def find_items(rakuten: RakutenClient, genre: dict, exclude: set[str], settings: config.Settings,
+               rng: random.Random, count: int) -> tuple[list[Item], str]:
+    """まとめ投稿用に、同じキーワード（＝同じ種類の商品）から複数件選ぶ.
+
+    同じショップの色違い・サイズ違いばかりにならないよう、1ショップ1商品まで。
+    """
+    keywords = genre["keywords"][:]
+    rng.shuffle(keywords)
+    best: tuple[list[Item], str] = ([], "")
+    for keyword in keywords[:3]:
+        picked, shops = [], set()
+        for it in _candidates(rakuten.search(keyword), exclude, settings):
+            if it.shop_name in shops:
+                continue
+            shops.add(it.shop_name)
+            picked.append(it)
+            if len(picked) == count:
+                break
+        if len(picked) == count:
+            return sorted(picked, key=lambda it: it.price), keyword
+        if len(picked) > len(best[0]):
+            best = (picked, keyword)
+        time.sleep(1.1)
+    if len(best[0]) >= 3:
+        return sorted(best[0], key=lambda it: it.price), best[1]
+    raise RuntimeError(f"{genre['label']} でまとめ投稿に使える商品が3件以上見つかりませんでした")
 
 
 def public_image_urls(settings: config.Settings, post: dict) -> list[str]:
@@ -210,11 +327,13 @@ def write_insights_csv(posts: list[dict], path: Path = config.INSIGHTS_CSV) -> N
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8-sig", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["number", "genre", "short_name", "price", "published_at", "permalink", *metrics])
+        w.writerow(["number", "kind", "genre", "title", "price", "published_at", "permalink", *metrics])
         for p in posts:
             if p.get("status") != "published":
                 continue
             ins = p.get("insights") or {}
-            w.writerow([p["number"], p["genre"], p.get("short_name", ""), p["price"],
+            title = p.get("title") or p.get("short_name", "")
+            price = "/".join(f"{it['price']}" for it in storage.post_items(p))
+            w.writerow([p["number"], p.get("kind", "single"), p["genre"], title, price,
                         p.get("published_at", ""), p.get("permalink", ""),
                         *[ins.get(m, "") for m in metrics]])

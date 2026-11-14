@@ -15,9 +15,11 @@ from .site import build_site
 
 
 def cmd_prepare(args, settings):
-    post = pipeline.prepare(settings, genre_id=args.genre, use_inbox=not args.no_inbox)
-    kind = "写真カルーセル" if post.get("source") == "photo" else "自動選定"
-    print(f"#{post['number']:03d} [{post['genre']}] {post['short_name']}（{kind}・{len(post['images'])}枚）を準備しました")
+    post = pipeline.prepare(settings, genre_id=args.genre, use_inbox=not args.no_inbox, mode=args.mode)
+    kind = {"photo": "写真カルーセル", "pick": "指定商品", "auto": "自動選定"}[post["source"]]
+    title = post.get("title") or post.get("short_name")
+    form = "まとめ" if post["kind"] == "roundup" else "単品"
+    print(f"#{post['number']:03d} [{post['genre']}] {title}（{kind}・{form}・{len(post['images'])}枚）を準備しました")
     print("-" * 40)
     print(post["caption"])
 
@@ -56,6 +58,8 @@ def cmd_refresh_token(args, settings):
 def cmd_demo(args, settings):
     """API を使わずにサンプル画像とキャプションを出力する（デザイン確認用）."""
     genres = config.load_genres()
+    if args.roundup:
+        return _demo_roundup(pipeline.pick_genre(genres, 1, args.genre or "travel"), settings)
     genre = pipeline.pick_genre(genres, 1, args.genre or "gadget")
     item = Item(item_code="demo:1", name="サンプル ワイヤレスイヤホン ノイズキャンセリング", price=7980,
                 item_url="https://item.rakuten.co.jp/", affiliate_url="https://hb.afl.rakuten.co.jp/",
@@ -71,13 +75,45 @@ def cmd_demo(args, settings):
     print(compose_caption(copy, item))
 
 
+def _demo_roundup(genre, settings):
+    from .caption import RoundupCopy, RoundupItemCopy, compose_roundup_caption
+    from .image_card import render_roundup_cover, render_roundup_item, render_roundup_summary
+
+    samples = [("サンプル 圧縮ポーチ3点セット", 1980, 4.6, 5120, "荷物を減らしたい人に", ["衣類を約半分に圧縮", "3サイズで仕分けできる"]),
+               ("サンプル 吊り下げ洗面ポーチ", 2480, 4.5, 2310, "ホテルの洗面台が狭い人に", ["フックで吊り下げ可能", "防水素材で濡れても安心"]),
+               ("サンプル ガジェットポーチ", 2980, 4.4, 1870, "充電器が多い人に", ["ケーブル類を一括収納", "自立するので取り出しやすい"]),
+               ("サンプル 機内用ネックピロー", 3480, 4.3, 980, "長距離フライトの人に", ["低反発で首を支える", "コンパクトに収納できる"])]
+    items = [Item(item_code=f"demo:{i}", name=n, price=pr, item_url="", affiliate_url="", image_url="",
+                  review_average=a, review_count=c, shop_name="", caption="") for i, (n, pr, a, c, _, _) in enumerate(samples)]
+    copy = RoundupCopy(title="旅の荷物がスッと収まる収納グッズ4選", subtitle="レビュー評価4.3以上だけを厳選",
+                       items=[RoundupItemCopy(n, b, pts) for n, _, _, _, b, pts in samples],
+                       caption="（ここに Claude が生成した導入文が入ります）", hashtags=genre["hashtags"])
+    out = config.ROOT / "data" / "demo"
+    number = 12
+    render_roundup_cover(out_path=out / "roundup-1.jpg", number=number, genre=genre, title=copy.title,
+                         subtitle=copy.subtitle, names=[c.short_name for c in copy.items],
+                         account_name=settings.account_name)
+    rows = []
+    for i, (it, c) in enumerate(zip(items, copy.items), 1):
+        render_roundup_item(out_path=out / f"roundup-{i + 1}.jpg", number=number, genre=genre, index=i,
+                            total=len(items), short_name=c.short_name, best_for=c.best_for, points=c.points,
+                            price=it.price, review_average=it.review_average, review_count=it.review_count)
+        rows.append({"short_name": c.short_name, "best_for": c.best_for, "price": it.price,
+                     "review_average": it.review_average, "review_count": it.review_count})
+    render_roundup_summary(out_path=out / f"roundup-{len(items) + 2}.jpg", number=number, genre=genre, rows=rows)
+    print(f"サンプル画像 → {out.relative_to(config.ROOT)}/roundup-*.jpg\n")
+    print(compose_roundup_caption(copy, items, number))
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="sns_affiliate", description="Instagram × 楽天アフィリエイト 自動投稿")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("prepare", help="商品を選び、投稿文と画像を生成する")
     p.add_argument("--genre", help="ジャンルID（未指定ならローテーション）")
-    p.add_argument("--no-inbox", action="store_true", help="inbox/ の写真を使わず自動選定する")
+    p.add_argument("--no-inbox", action="store_true", help="inbox/ を使わず自動選定する")
+    p.add_argument("--mode", choices=["auto", "single", "roundup"], default="auto",
+                   help="自動選定時の投稿形式（auto: まとめ曜日はまとめ・それ以外は単品）")
     p.set_defaults(func=cmd_prepare)
 
     p = sub.add_parser("publish", help="準備済みの投稿を Instagram に公開する")
@@ -91,6 +127,7 @@ def main(argv=None) -> int:
 
     p = sub.add_parser("demo", help="APIなしでサンプル画像を生成")
     p.add_argument("--genre")
+    p.add_argument("--roundup", action="store_true", help="まとめ投稿のサンプルを作る")
     p.set_defaults(func=cmd_demo)
 
     args = parser.parse_args(argv)

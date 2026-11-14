@@ -42,6 +42,10 @@ class Settings:
     min_review_average: float = field(default_factory=lambda: float(_env("MIN_REVIEW_AVERAGE", "4.0")))
     repost_cooldown_days: int = field(default_factory=lambda: int(_env("REPOST_COOLDOWN_DAYS", "90")))
 
+    # まとめ投稿: 自動モードでまとめ投稿にする曜日（1=月 … 7=日）と紹介する商品数
+    roundup_weekdays: str = field(default_factory=lambda: _env("ROUNDUP_WEEKDAYS", "3,6"))
+    roundup_size: int = field(default_factory=lambda: int(_env("ROUNDUP_SIZE", "5")))
+
     # Claude
     claude_model: str = field(default_factory=lambda: _env("CLAUDE_MODEL", "claude-opus-5-5"))
 

@@ -37,8 +37,18 @@ def next_number(posts: list[dict]) -> int:
 
 def recently_posted_codes(posts: list[dict], cooldown_days: int) -> set[str]:
     cutoff = datetime.now(JST) - timedelta(days=cooldown_days)
-    return {
-        p["item_code"]
-        for p in posts
-        if p.get("status") != "failed" and datetime.fromisoformat(p["created_at"]) >= cutoff
-    }
+    codes: set[str] = set()
+    for p in posts:
+        if p.get("status") == "failed" or datetime.fromisoformat(p["created_at"]) < cutoff:
+            continue
+        codes.update(it["item_code"] for it in post_items(p))
+    return codes
+
+
+def post_items(post: dict) -> list[dict]:
+    """単品投稿もまとめ投稿も、商品のリストとして扱う."""
+    if post.get("kind") == "roundup":
+        return post["items"]
+    return [{k: post.get(k) for k in ("item_code", "item_name", "short_name", "price", "review_average",
+                                      "review_count", "item_url", "affiliate_url")}
+            | {"image": post["image_path"]}]

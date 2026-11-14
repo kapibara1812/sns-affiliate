@@ -5,14 +5,15 @@ import pytest
 from PIL import Image
 
 from sns_affiliate import config, pipeline, storage
-from sns_affiliate.caption import PostCopy, compose_caption, parse_copy
+from sns_affiliate.caption import (PostCopy, RoundupCopy, RoundupItemCopy, compose_caption,
+                                   compose_roundup_caption, parse_copy, parse_roundup)
 from sns_affiliate.rakuten import Item
 
 
-def make_item(code="shop:1", reviews=100, avg=4.5, price=3980):
+def make_item(code="shop:1", reviews=100, avg=4.5, price=3980, shop=None):
     return Item(item_code=code, name=f"商品{code}", price=price, item_url="https://item.rakuten.co.jp/x",
                 affiliate_url=f"https://hb.afl.rakuten.co.jp/{code}", image_url="", review_average=avg,
-                review_count=reviews, shop_name="shop", caption="説明")
+                review_count=reviews, shop_name=shop or f"shop-{code}", caption="説明")
 
 
 class FakeRakuten:
@@ -38,6 +39,12 @@ class FakeWriter:
         return PostCopy(headline="見出しテスト", points=["a", "b", "c"], short_name="短い名前",
                         caption=f"本文 #{number:03d}", hashtags=["#テスト"],
                         slide_captions=[f"テロップ{i}" for i in range(len(photos) - 1)])
+
+    def generate_roundup(self, items, genre, number, theme, comment=""):
+        self.calls.append(("roundup", theme, comment, len(items)))
+        return RoundupCopy(title=f"{theme}{len(items)}選", subtitle="サブ", caption="導入文", hashtags=["#まとめ"],
+                           items=[RoundupItemCopy(f"短名{i}", f"向いている人{i}", ["特徴A", "特徴B"])
+                                  for i in range(len(items))])
 
 
 class FakeIG:
@@ -113,7 +120,7 @@ def test_prepare_then_publish(tmp_project):
     s = config.Settings()
     s.public_base_url = "https://example.github.io/sns-affiliate"
     rakuten = FakeRakuten([make_item("a"), make_item("b")])
-    post = pipeline.prepare(s, rakuten=rakuten, writer=FakeWriter(), rng=random.Random(1))
+    post = pipeline.prepare(s, mode="single", rakuten=rakuten, writer=FakeWriter(), rng=random.Random(1))
 
     assert post["number"] == 1 and post["status"] == "prepared"
     img = Image.open(tmp_project / post["image_path"])
@@ -122,7 +129,7 @@ def test_prepare_then_publish(tmp_project):
     assert post["affiliate_url"] in html and 'rel="sponsored noopener"' in html
 
     # 同じ商品は連続で選ばれない
-    post2 = pipeline.prepare(s, rakuten=rakuten, writer=FakeWriter(), rng=random.Random(1))
+    post2 = pipeline.prepare(s, mode="single", rakuten=rakuten, writer=FakeWriter(), rng=random.Random(1))
     assert post2["item_code"] != post["item_code"]
 
     ig = FakeIG()
@@ -179,3 +186,71 @@ def test_prepare_from_inbox_photos(tmp_project):
     ig = FakeIG()
     pipeline.publish(s, ig=ig, wait=False)
     assert len(ig.calls[0][0]) == 5 and ig.calls[0][0][0].endswith("0001-01.jpg")
+
+
+def _write_memo(root, name, text, photos=0):
+    folder = root / "inbox" / name
+    folder.mkdir(parents=True)
+    (folder / "memo.txt").write_text(text, encoding="utf-8")
+    for i in range(1, photos + 1):
+        Image.new("RGB", (1000, 1000), "gray").save(folder / f"{i}.jpg")
+    return folder
+
+
+def test_inbox_single_without_photo(tmp_project):
+    _write_memo(tmp_project, "a", "https://item.rakuten.co.jp/shopA/x1/\n")
+    s = config.Settings()
+    post = pipeline.prepare(s, rakuten=FakeRakuten([]), writer=FakeWriter())
+    assert post["kind"] == "single" and post["source"] == "pick"
+    assert post["item_code"] == "shopA:x1" and len(post["images"]) == 1
+
+
+def test_inbox_roundup_from_urls(tmp_project):
+    urls = "\n".join(f"https://item.rakuten.co.jp/shop{i}/item{i}/" for i in range(4))
+    _write_memo(tmp_project, "b", f"テーマ: 機内持ち込みグッズ\nジャンル: travel\n{urls}\n", photos=2)
+    s = config.Settings()
+    writer = FakeWriter()
+    post = pipeline.prepare(s, rakuten=FakeRakuten([]), writer=writer)
+
+    assert post["kind"] == "roundup" and post["genre"] == "travel" and post["source"] == "pick"
+    assert writer.calls[0] == ("roundup", "機内持ち込みグッズ", "", 4)
+    assert [it["item_code"] for it in post["items"]] == [f"shop{i}:item{i}" for i in range(4)]
+    assert len(post["images"]) == 6  # 表紙 + 4商品 + 比較表
+    for rel in post["images"]:
+        assert Image.open(tmp_project / rel).size == (1080, 1350)
+    assert "①" in post["caption"] and "#001" in post["caption"] and post["caption"].startswith("【PR】")
+    html = (tmp_project / "docs" / "index.html").read_text()
+    assert "#001-1" in html and "#001-4" in html and "shop3:item3" in html
+
+
+def test_auto_roundup_picks_distinct_shops_and_skips_recent(tmp_project):
+    items = [make_item(f"s{i}:x", reviews=100 + i, shop=f"shop{i % 6}") for i in range(10)]
+    s = config.Settings()
+    post = pipeline.prepare(s, mode="roundup", rakuten=FakeRakuten(items), writer=FakeWriter(),
+                            rng=random.Random(0))
+    shops = [it["item_code"] for it in post["items"]]
+    assert len(shops) == 5
+    assert len({items[int(c[1:].split(":")[0])].shop_name for c in shops}) == 5
+    prices = [it["price"] for it in post["items"]]
+    assert prices == sorted(prices)
+    # 次のまとめでは同じ商品を使わない
+    post2 = pipeline.prepare(s, mode="roundup", genre_id=post["genre"], rakuten=FakeRakuten(items),
+                             writer=FakeWriter(), rng=random.Random(0))
+    assert not {it["item_code"] for it in post2["items"]} & set(shops)
+
+
+def test_roundup_day():
+    from datetime import datetime
+    s = config.Settings()
+    s.roundup_weekdays = "3,6"
+    assert pipeline.is_roundup_day(s, datetime(2026, 11, 18))      # 水
+    assert not pipeline.is_roundup_day(s, datetime(2026, 11, 16))  # 月
+
+
+def test_roundup_caption_limit_and_parse_fallback():
+    items = [make_item(f"c{i}") for i in range(3)]
+    copy = parse_roundup({"title": "t", "subtitle": "s", "caption": "あ" * 5000, "hashtags": ["x"],
+                          "items": [{"short_name": "a", "best_for": "b", "points": ["1", "2", "3"]}]}, items)
+    assert len(copy.items) == 3 and copy.items[0].points == ["1", "2"]
+    text = compose_roundup_caption(copy, items, 7)
+    assert len(text) <= 2200 and "③" in text and "#PR" in text

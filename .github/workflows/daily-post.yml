@@ -10,6 +10,11 @@ on:
         description: "ジャンルID（gadget / travel / training / appliance / book / investment。空欄でローテーション）"
         required: false
         default: ""
+      mode:
+        description: "inbox が空のときの投稿形式（auto: 水・土はまとめ、他は単品）"
+        type: choice
+        options: [auto, single, roundup]
+        default: auto
       publish:
         description: "Instagram に公開する（false なら生成だけ）"
         type: boolean
@@ -39,6 +44,8 @@ jobs:
       SITE_TITLE: ${{ vars.SITE_TITLE }}
       USE_PRODUCT_IMAGE: ${{ vars.USE_PRODUCT_IMAGE }}
       CLAUDE_MODEL: ${{ vars.CLAUDE_MODEL }}
+      ROUNDUP_WEEKDAYS: ${{ vars.ROUNDUP_WEEKDAYS }}
+      ROUNDUP_SIZE: ${{ vars.ROUNDUP_SIZE }}
     steps:
       - uses: actions/checkout@v4
 
@@ -52,8 +59,8 @@ jobs:
           sudo apt-get update -qq && sudo apt-get install -y -qq fonts-noto-cjk
           pip install -r requirements.txt
 
-      - name: Prepare post (楽天で商品選定 → Claude で投稿文 → 画像生成)
-        run: python -m sns_affiliate prepare ${{ inputs.genre && format('--genre {0}', inputs.genre) || '' }}
+      - name: Prepare post (inbox or 楽天で商品選定 → Claude で投稿文 → 画像生成)
+        run: python -m sns_affiliate prepare --mode "${{ inputs.mode || 'auto' }}" ${{ inputs.genre && format('--genre {0}', inputs.genre) || '' }}
 
       - name: Commit & push (GitHub Pages に画像と一覧ページを反映)
         run: |
