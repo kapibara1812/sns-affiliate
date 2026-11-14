@@ -1,0 +1,74 @@
+name: daily-post
+
+on:
+  schedule:
+    # 毎日 20:07 JST（= 11:07 UTC）。Instagram は夜の閲覧が多い時間帯が狙い目
+    - cron: "7 11 * * *"
+  workflow_dispatch:
+    inputs:
+      genre:
+        description: "ジャンルID（gadget / travel / training / appliance / book / investment。空欄でローテーション）"
+        required: false
+        default: ""
+      publish:
+        description: "Instagram に公開する（false なら生成だけ）"
+        type: boolean
+        default: true
+
+concurrency:
+  group: sns-affiliate
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PYTHONPATH: src
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      RAKUTEN_APP_ID: ${{ secrets.RAKUTEN_APP_ID }}
+      RAKUTEN_ACCESS_KEY: ${{ secrets.RAKUTEN_ACCESS_KEY }}
+      RAKUTEN_AFFILIATE_ID: ${{ secrets.RAKUTEN_AFFILIATE_ID }}
+      IG_USER_ID: ${{ secrets.IG_USER_ID }}
+      IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
+      PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
+      IG_ACCOUNT_NAME: ${{ vars.IG_ACCOUNT_NAME }}
+      SITE_TITLE: ${{ vars.SITE_TITLE }}
+      USE_PRODUCT_IMAGE: ${{ vars.USE_PRODUCT_IMAGE }}
+      CLAUDE_MODEL: ${{ vars.CLAUDE_MODEL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq fonts-noto-cjk
+          pip install -r requirements.txt
+
+      - name: Prepare post (楽天で商品選定 → Claude で投稿文 → 画像生成)
+        run: python -m sns_affiliate prepare ${{ inputs.genre && format('--genre {0}', inputs.genre) || '' }}
+
+      - name: Commit & push (GitHub Pages に画像と一覧ページを反映)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data docs
+          git commit -m "post: prepare $(date +%F)"
+          git push
+
+      - name: Publish to Instagram
+        if: ${{ github.event_name == 'schedule' || inputs.publish }}
+        run: python -m sns_affiliate publish
+
+      - name: Commit result
+        if: always()
+        run: |
+          git add data docs
+          git diff --cached --quiet || (git commit -m "post: publish $(date +%F)" && git push)

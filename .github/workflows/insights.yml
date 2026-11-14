@@ -1,0 +1,37 @@
+name: insights
+
+on:
+  schedule:
+    # 毎日 6:23 JST（= 21:23 UTC）
+    - cron: "23 21 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: sns-affiliate
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  insights:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PYTHONPATH: src
+      IG_USER_ID: ${{ secrets.IG_USER_ID }}
+      IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python -m sns_affiliate insights
+      - name: Commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data
+          git diff --cached --quiet || (git commit -m "insights: $(date +%F)" && git push)
