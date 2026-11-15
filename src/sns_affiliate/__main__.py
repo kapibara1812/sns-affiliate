@@ -17,6 +17,8 @@ from .site import build_site
 def cmd_prepare(args, settings):
     post = pipeline.prepare(settings, genre_id=args.genre, use_inbox=not args.no_inbox, mode=args.mode)
     kind = {"photo": "写真カルーセル", "pick": "指定商品", "auto": "自動選定"}[post["source"]]
+    if post.get("network") == "a8":
+        kind = "A8.net・" + kind
     title = post.get("title") or post.get("short_name")
     form = "まとめ" if post["kind"] == "roundup" else "単品"
     print(f"#{post['number']:03d} [{post['genre']}] {title}（{kind}・{form}・{len(post['images'])}枚）を準備しました")
@@ -112,8 +114,8 @@ def main(argv=None) -> int:
     p = sub.add_parser("prepare", help="商品を選び、投稿文と画像を生成する")
     p.add_argument("--genre", help="ジャンルID（未指定ならローテーション）")
     p.add_argument("--no-inbox", action="store_true", help="inbox/ を使わず自動選定する")
-    p.add_argument("--mode", choices=["auto", "single", "roundup"], default="auto",
-                   help="自動選定時の投稿形式（auto: まとめ曜日はまとめ・それ以外は単品）")
+    p.add_argument("--mode", choices=["auto", "single", "roundup", "a8"], default="auto",
+                   help="inbox が空のときの投稿形式（auto: A8曜日はA8案件・まとめ曜日はまとめ・それ以外は楽天の単品）")
     p.set_defaults(func=cmd_prepare)
 
     p = sub.add_parser("publish", help="準備済みの投稿を Instagram に公開する")

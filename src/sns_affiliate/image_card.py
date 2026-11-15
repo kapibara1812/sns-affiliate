@@ -99,7 +99,11 @@ def render_card(
     review_count: int,
     product_image_url: str | None = None,
     account_name: str = "",
+    price_label: str | None = None,
+    cta_verb: str = "購入は",
+    footnote: str = "※価格は投稿時点のものです",
 ) -> Path:
+    """price_label を渡すと価格欄をその文字列にする（A8.net のサービス案件など、価格が固定でない場合）."""
     bg = _hex(genre.get("color", "#1f2937"))
     accent = _hex(genre.get("accent", "#facc15"))
     white = (255, 255, 255)
@@ -175,12 +179,11 @@ def render_card(
 
     # 下部: 価格・レビュー・導線
     draw.line((MARGIN, footer_top, WIDTH - MARGIN, footer_top), fill=accent, width=3)
-    draw.text(
-        (MARGIN, footer_top + 30),
-        f"¥{price:,}",
-        font=_font("bold", 64),
-        fill=accent,
-    )
+    label = price_label if price_label is not None else f"¥{price:,}"
+    if label:
+        lf = _font("bold", 64)
+        lines = _wrap(draw, label, lf, (WIDTH - MARGIN * 2) * (0.55 if review_count else 1), 1)
+        draw.text((MARGIN, footer_top + 30), lines[0] if lines else "", font=lf, fill=accent)
     if review_count:
         draw.text(
             (WIDTH - MARGIN, footer_top + 64),
@@ -189,13 +192,13 @@ def render_card(
             fill=white,
             anchor="rm",
         )
-    cta = f"購入はプロフィールのリンク → #{number:03d}"
+    cta = f"{cta_verb}プロフィールのリンク → #{number:03d}"
     draw.rounded_rectangle((MARGIN, footer_top + 120, WIDTH - MARGIN, footer_top + 190), radius=35, fill=accent)
     draw.text((WIDTH // 2, footer_top + 155), cta, font=_font("bold", 38), fill=bg, anchor="mm")
     if account_name:
         draw.text((WIDTH - MARGIN, HEIGHT - 36), f"@{account_name}", font=_font("regular", 28),
                   fill=muted, anchor="rs")
-    draw.text((MARGIN, HEIGHT - 36), "※価格は投稿時点のものです", font=_font("regular", 24),
+    draw.text((MARGIN, HEIGHT - 36), footnote, font=_font("regular", 24),
               fill=muted, anchor="ls")
 
     out_path.parent.mkdir(parents=True, exist_ok=True)

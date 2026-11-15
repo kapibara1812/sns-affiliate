@@ -12,6 +12,7 @@ memo.txt の書き方で投稿の種類が決まる:
     - URL 1つ + 写真あり → 写真カルーセル投稿
     - URL 1つ + 写真なし → 文字カードの単品紹介
     - URL 2〜8つ         → まとめ・比較投稿（写真は使わない）
+    - 「A8: 案件ID」の行     → A8.net 案件の紹介（写真があれば写真カルーセル）
 「ジャンル: gadget」「テーマ: 機内持ち込みできる旅行グッズ」の行で指定もできる。
 使い終わったら memo.txt だけ inbox/_used/ に残し、元の写真は削除する
 （投稿用の画像は docs/images/ に位置情報などのメタデータなしで書き出し済み）。
@@ -42,6 +43,7 @@ class InboxEntry:
     genre_id: str | None
     theme: str = ""
     photos: list[Path] = field(default_factory=list)
+    a8_id: str = ""
 
     @property
     def name(self) -> str:
@@ -65,10 +67,12 @@ def parse_entry(folder: Path) -> InboxEntry | None:
     if not memo.exists():
         return None
     urls: list[str] = []
-    genre_id, theme, comment_lines = None, "", []
+    genre_id, theme, a8_id, comment_lines = None, "", "", []
     for line in memo.read_text(encoding="utf-8-sig").splitlines():
         stripped = line.strip()
-        if url := re.search(r"https?://\S+", stripped):
+        if m := re.match(r"^A8\s*[:：]\s*(\S+)", stripped, re.IGNORECASE):
+            a8_id = m.group(1)
+        elif url := re.search(r"https?://\S+", stripped):
             urls.append(url.group(0))
         elif m := re.match(r"^ジャンル\s*[:：]\s*(\S+)", stripped):
             genre_id = m.group(1)
@@ -76,12 +80,12 @@ def parse_entry(folder: Path) -> InboxEntry | None:
             theme = m.group(1).strip()
         else:
             comment_lines.append(line)
-    if not urls:
+    if not urls and not a8_id:
         return None
     photos = sorted((p for p in folder.iterdir() if p.suffix.lower() in PHOTO_EXTS), key=_natural_key)
     return InboxEntry(path=folder, urls=list(dict.fromkeys(urls))[:MAX_ROUNDUP],
                       comment="\n".join(comment_lines).strip(), genre_id=genre_id, theme=theme,
-                      photos=photos[:MAX_PHOTOS])
+                      photos=photos[:MAX_PHOTOS], a8_id=a8_id)
 
 
 def list_entries(inbox_dir: Path | None = None) -> list[InboxEntry]:

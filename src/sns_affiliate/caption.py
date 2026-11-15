@@ -161,6 +161,37 @@ def build_roundup_prompt(items: list[Item], genre: dict, number: int, theme: str
 """
 
 
+def build_a8_prompt(program, genre: dict, number: int, comment: str = "", extra_photos: int = 0,
+                    avoid: list[str] | None = None) -> str:
+    facts = "\n".join(f"- {f}" for f in program.facts)
+    owner = (f"<owner_comment>\n{comment}\n</owner_comment>" if comment
+             else "（投稿者本人の利用経験はありません。体験談は書かないでください）")
+    ng = program.ng_words + (avoid or [])
+    slides = (f"投稿は自分で撮った写真のカルーセルです。2枚目以降の写真は{extra_photos}枚あるので、slide_captions を"
+              f"{extra_photos}個作ってください（添付した写真を見て、それぞれの内容に合った一言に）。"
+              if extra_photos else "slide_captions は空配列にしてください。")
+    return f"""{_genre_header(genre, number)}
+<service>
+サービス名: {program.name}
+料金の表記: {program.price_label or '（指定なし。料金には触れず「詳しくは公式サイトで」とする）'}
+公式に確認できる特徴:
+{facts}
+{f'補足: {program.notes}' if program.notes else ''}
+</service>
+
+{owner}
+
+このサービス（A8.net の広告案件）の紹介投稿を作ってください。
+- <service> に書かれた特徴だけを使う。料金・特典・期間・数字を新しく作らない。
+- 「条件や最新の内容は公式サイトで確認してね」という一文を本文に入れる。
+- short_name はサービス名を短くしたもの。
+{f'- 次の表現は広告主のルールで禁止なので使わない: {"、".join(ng)}' if ng else ''}
+{slides}
+キャプションの最後は「詳しくはプロフィールのリンク → #{number:03d} からチェックしてね」の趣旨で締めてください。
+ハッシュタグには次のジャンル定番タグも含めてください: {' '.join(genre.get('hashtags', []))}
+"""
+
+
 def _photo_b64(path: Path, max_side: int = 1024) -> str:
     """写真を縮小して base64 JPEG にする（トークン節約）."""
     from PIL import Image, ImageOps
@@ -205,6 +236,29 @@ class CaptionGenerator:
                                                          "data": _photo_b64(photo)}})
         content.append({"type": "text", "text": build_prompt(item, genre, number, comment, extra_photos)})
         return parse_copy(self._call(content, SINGLE_SCHEMA), extra_photos)
+
+    def generate_a8(self, program, genre: dict, number: int, comment: str = "",
+                    photos: list[Path] | None = None) -> PostCopy:
+        """A8 案件の投稿文。広告主の NG ワードが入っていたら1回だけ作り直す."""
+        from .a8 import find_ng_words
+
+        photos = photos or []
+        extra_photos = max(0, len(photos) - 1)
+        images: list[dict] = []
+        for i, photo in enumerate(photos, 1):
+            images.append({"type": "text", "text": f"写真{i}枚目:"})
+            images.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
+                                                        "data": _photo_b64(photo)}})
+        avoid: list[str] = []
+        for _ in range(2):
+            prompt = build_a8_prompt(program, genre, number, comment, extra_photos, avoid)
+            copy = parse_copy(self._call(images + [{"type": "text", "text": prompt}], SINGLE_SCHEMA), extra_photos)
+            found = find_ng_words(program, copy.headline, copy.short_name, copy.caption,
+                                  *copy.points, *copy.slide_captions)
+            if not found:
+                return copy
+            avoid = found
+        raise RuntimeError(f"A8案件 {program.id}: 禁止表現 {found} を含まない投稿文を作れませんでした")
 
     def generate_roundup(self, items: list[Item], genre: dict, number: int, theme: str,
                          comment: str = "") -> RoundupCopy:
@@ -285,3 +339,14 @@ def compose_roundup_caption(copy: RoundupCopy, items: list[Item], number: int) -
     room = 2200 - len(head) - len(tail)
     intro = copy.caption if len(copy.caption) <= room else copy.caption[: max(0, room - 1)] + "…"
     return head + intro + tail
+
+
+def compose_a8_caption(copy: PostCopy, program) -> str:
+    price = f"💰 {program.price_label}（投稿時点）\n" if program.price_label else ""
+    body = (
+        "【PR】A8.netのアフィリエイト広告を利用しています\n\n"
+        f"{copy.caption}\n\n"
+        f"{price}※料金・特典・条件は変わることがあります。最新の内容は公式サイトでご確認ください\n\n"
+        + _with_pr(copy.hashtags)
+    )
+    return body[:2200]

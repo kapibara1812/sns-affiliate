@@ -40,6 +40,10 @@ class FakeWriter:
                         caption=f"本文 #{number:03d}", hashtags=["#テスト"],
                         slide_captions=[f"テロップ{i}" for i in range(len(photos) - 1)])
 
+    def generate_a8(self, program, genre, number, comment="", photos=None):
+        self.calls.append(("a8", program.id, comment))
+        return self.generate(None, genre, number, comment, photos)
+
     def generate_roundup(self, items, genre, number, theme, comment=""):
         self.calls.append(("roundup", theme, comment, len(items)))
         return RoundupCopy(title=f"{theme}{len(items)}選", subtitle="サブ", caption="導入文", hashtags=["#まとめ"],
@@ -63,8 +67,10 @@ def tmp_project(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DOCS_DIR", tmp_path / "docs")
     monkeypatch.setattr(config, "IMAGES_DIR", tmp_path / "docs" / "images")
     monkeypatch.setattr(config, "ROOT", tmp_path)
-    from sns_affiliate import inbox
+    from sns_affiliate import a8, inbox
     monkeypatch.setattr(inbox, "INBOX_DIR", tmp_path / "inbox")
+    monkeypatch.setattr(a8, "PROGRAMS_FILE", tmp_path / "config" / "a8_programs.json")
+    monkeypatch.setattr(pipeline, "is_a8_day", lambda settings, today=None: False)
     # storage / site はデフォルト引数でパスを束縛しているので関数側も差し替える
     monkeypatch.setattr(storage, "load_posts", lambda path=None: _load(tmp_path))
     monkeypatch.setattr(storage, "save_posts", lambda posts, path=None: _save(tmp_path, posts))
@@ -254,3 +260,87 @@ def test_roundup_caption_limit_and_parse_fallback():
     assert len(copy.items) == 3 and copy.items[0].points == ["1", "2"]
     text = compose_roundup_caption(copy, items, 7)
     assert len(text) <= 2200 and "③" in text and "#PR" in text
+
+
+A8_PROGRAMS = {"programs": [
+    {"id": "trip", "name": "テスト旅行予約", "genre": "travel", "link": "https://px.a8.net/svt/ejp?a8mat=AAA",
+     "impression": "https://www10.a8.net/0.gif?a8mat=AAA", "sns_allowed": True, "price_label": "会員登録無料",
+     "facts": ["国内の宿を予約できる"], "ng_words": ["最安"]},
+    {"id": "gym", "name": "テストジム", "genre": "training", "link": "https://px.a8.net/svt/ejp?a8mat=BBB",
+     "sns_allowed": True, "facts": ["24時間営業"]},
+    {"id": "nosns", "name": "SNS不可の案件", "genre": "gadget", "link": "https://px.a8.net/svt/ejp?a8mat=CCC",
+     "sns_allowed": False, "facts": ["x"]},
+]}
+
+
+def _write_programs(root):
+    path = root / "config" / "a8_programs.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(A8_PROGRAMS, ensure_ascii=False), encoding="utf-8")
+
+
+def test_a8_auto_rotates_programs_and_skips_non_sns(tmp_project):
+    _write_programs(tmp_project)
+    s = config.Settings()
+    codes = []
+    for _ in range(3):
+        try:
+            post = pipeline.prepare(s, mode="a8", writer=FakeWriter())
+        except RuntimeError as e:
+            assert "A8 案件がありません" in str(e)
+            break
+        codes.append(post["item_code"])
+        assert post["network"] == "a8" and post["affiliate_url"].startswith("https://px.a8.net/")
+        assert post["caption"].startswith("【PR】A8.net")
+    # SNS 不可の案件は使わず、2件を順番に使ったあとはクールダウンで止まる
+    assert sorted(codes) == ["a8:gym", "a8:trip"]
+    html = (tmp_project / "docs" / "index.html").read_text()
+    assert "公式サイトを見る" in html and "0.gif?a8mat=AAA" in html and "会員登録無料" in html
+
+
+def test_a8_from_inbox_with_photos(tmp_project):
+    _write_programs(tmp_project)
+    _write_memo(tmp_project, "trip", "A8: trip\n先月これで温泉宿を予約した。ポイントが貯まった。\n", photos=2)
+    writer = FakeWriter()
+    post = pipeline.prepare(config.Settings(), writer=writer)
+    assert post["item_code"] == "a8:trip" and post["genre"] == "travel" and post["source"] == "photo"
+    assert writer.calls[0][0] == "a8" and "温泉宿" in writer.calls[0][2]
+    assert len(post["images"]) == 3
+
+
+def test_a8_inbox_rejects_non_sns_and_raw_links(tmp_project):
+    _write_programs(tmp_project)
+    _write_memo(tmp_project, "x", "A8: nosns\n")
+    with pytest.raises(RuntimeError, match="sns_allowed"):
+        pipeline.prepare(config.Settings(), writer=FakeWriter())
+
+
+def test_a8_raw_link_in_memo_gives_help(tmp_project):
+    _write_memo(tmp_project, "y", "https://px.a8.net/svt/ejp?a8mat=ZZZ\n")
+    with pytest.raises(RuntimeError, match="A8: 案件ID"):
+        pipeline.prepare(config.Settings(), rakuten=FakeRakuten([]), writer=FakeWriter())
+
+
+def test_generate_a8_retries_on_ng_words():
+    from sns_affiliate.a8 import A8Program
+    from sns_affiliate.caption import CaptionGenerator
+
+    program = A8Program(id="p", name="n", genre="travel", link="https://px.a8.net/x", facts=["f"],
+                        sns_allowed=True, ng_words=["最安"])
+    replies = [{"headline": "業界最安の予約", "points": ["a", "b", "c"], "short_name": "n",
+                "caption": "c", "hashtags": ["#a"], "slide_captions": []},
+               {"headline": "お得に予約", "points": ["a", "b", "c"], "short_name": "n",
+                "caption": "c", "hashtags": ["#a"], "slide_captions": []}]
+    prompts = []
+
+    class Gen(CaptionGenerator):
+        def __init__(self):
+            pass
+
+        def _call(self, content, schema):
+            prompts.append(content[-1]["text"])
+            return replies[len(prompts) - 1]
+
+    copy = Gen().generate_a8(program, config.load_genres()[1], 3)
+    assert copy.headline == "お得に予約"
+    assert "最安" in prompts[1]

@@ -10,8 +10,8 @@ from pathlib import Path
 
 import requests
 
-from . import config, inbox, storage
-from .caption import CaptionGenerator, compose_caption, compose_roundup_caption
+from . import a8, config, inbox, storage
+from .caption import CaptionGenerator, compose_a8_caption, compose_caption, compose_roundup_caption
 from .image_card import (render_card, render_photo_cover, render_photo_slide, render_roundup_cover,
                          render_roundup_item, render_roundup_summary)
 from .instagram import InstagramClient
@@ -43,10 +43,18 @@ def choose_item(items: list[Item], exclude: set[str], settings: config.Settings,
     return rng.choice(candidates[:5])
 
 
-def is_roundup_day(settings: config.Settings, today: datetime | None = None) -> bool:
+def _is_weekday(spec: str, today: datetime | None = None) -> bool:
     today = today or datetime.now(storage.JST)
-    days = {int(d) for d in settings.roundup_weekdays.replace(" ", "").split(",") if d}
+    days = {int(d) for d in spec.replace(" ", "").split(",") if d}
     return today.isoweekday() in days
+
+
+def is_roundup_day(settings: config.Settings, today: datetime | None = None) -> bool:
+    return _is_weekday(settings.roundup_weekdays, today)
+
+
+def is_a8_day(settings: config.Settings, today: datetime | None = None) -> bool:
+    return _is_weekday(settings.a8_weekdays, today)
 
 
 def prepare(settings: config.Settings, *, genre_id: str | None = None, use_inbox: bool = True,
@@ -56,21 +64,37 @@ def prepare(settings: config.Settings, *, genre_id: str | None = None, use_inbox
 
     優先順位:
       1. inbox/ に置かれたネタ（写真カルーセル / 指定商品の単品 / 指定商品のまとめ）
-      2. 自動選定（mode="roundup" か まとめ曜日ならまとめ投稿、それ以外は単品）
+      2. A8 案件（mode="a8" か A8 曜日で、使える案件がある場合）
+      3. 自動選定（mode="roundup" か まとめ曜日ならまとめ投稿、それ以外は単品）
     """
-    if mode not in {"auto", "single", "roundup"}:
-        raise ValueError(f"mode は auto / single / roundup のいずれかです: {mode}")
+    if mode not in {"auto", "single", "roundup", "a8"}:
+        raise ValueError(f"mode は auto / single / roundup / a8 のいずれかです: {mode}")
     rng = rng or random.Random()
     genres = config.load_genres()
     posts = storage.load_posts()
     number = storage.next_number(posts)
-    rakuten = rakuten or RakutenClient(settings)
     writer = writer or CaptionGenerator(settings.claude_model)
     exclude = storage.recently_posted_codes(posts, settings.repost_cooldown_days)
+    programs = a8.load_programs()
 
     entries = inbox.list_entries(inbox_dir) if use_inbox else []
     entry = entries[0] if entries else None
-    if entry:
+    program = None
+    if entry is None and (mode == "a8" or (mode == "auto" and is_a8_day(settings))):
+        program = a8.pick_program(programs, posts, settings.a8_cooldown_days, genre_id)
+        if program is None and mode == "a8":
+            raise RuntimeError("投稿できる A8 案件がありません（sns_allowed: true の案件を config/a8_programs.json に登録してください）")
+
+    if entry and entry.a8_id:
+        program = a8.get_program(programs, entry.a8_id)
+        genre = pick_genre(genres, number, genre_id or entry.genre_id or program.genre)
+        post = _build_a8(settings, writer, number, genre, program, entry.comment, entry.photos,
+                         source="photo" if entry.photos else "pick")
+    elif program is not None:
+        genre = pick_genre(genres, number, genre_id or program.genre)
+        post = _build_a8(settings, writer, number, genre, program, "", [], source="auto")
+    elif entry:
+        rakuten = rakuten or RakutenClient(settings)
         genre = pick_genre(genres, number, genre_id or entry.genre_id)
         items = [_lookup(rakuten, url, entry.name) for url in entry.urls]
         if entry.is_roundup:
@@ -80,6 +104,7 @@ def prepare(settings: config.Settings, *, genre_id: str | None = None, use_inbox
             post = _build_single(settings, writer, number, genre, items[0], entry.comment, entry.photos,
                                  source="photo" if entry.photos else "pick")
     else:
+        rakuten = rakuten or RakutenClient(settings)
         genre = pick_genre(genres, number, genre_id)
         roundup = mode == "roundup" or (mode == "auto" and is_roundup_day(settings))
         if roundup:
@@ -98,6 +123,9 @@ def prepare(settings: config.Settings, *, genre_id: str | None = None, use_inbox
 
 
 def _lookup(rakuten: RakutenClient, url: str, entry_name: str) -> Item:
+    if "a8.net" in url:
+        raise RuntimeError(f"inbox/{entry_name}: A8.net のリンクは config/a8_programs.json に案件として登録し、"
+                           "memo.txt には「A8: 案件ID」と書いてください")
     try:
         item = rakuten.lookup(item_code_from_url(url))
     except ValueError as e:
@@ -157,6 +185,50 @@ def _build_single(settings: config.Settings, writer: CaptionGenerator, number: i
         "headline": copy.headline,
         "points": copy.points,
         "caption": compose_caption(copy, item),
+        "status": "prepared",
+        "created_at": storage.now_iso(),
+    }
+
+
+def _build_a8(settings: config.Settings, writer: CaptionGenerator, number: int, genre: dict,
+              program: a8.A8Program, comment: str, photos: list[Path], source: str) -> dict:
+    copy = writer.generate_a8(program, genre, number, comment, photos)
+    card_kwargs = dict(number=number, genre=genre, headline=copy.headline, short_name=copy.short_name,
+                       points=copy.points, price=0, review_average=0, review_count=0,
+                       account_name=settings.account_name,
+                       price_label=program.price_label or "公式サイトをチェック",
+                       cta_verb="詳細は", footnote="※条件・料金は公式サイトでご確認ください")
+    images: list[Path] = []
+    if photos:
+        images.append(render_photo_cover(photo=photos[0], out_path=_out(number, 1), number=number, genre=genre,
+                                         headline=copy.headline, short_name=copy.short_name))
+        for i, (photo, telop) in enumerate(zip(photos[1:], copy.slide_captions), start=2):
+            images.append(render_photo_slide(photo=photo, out_path=_out(number, i), caption=telop))
+        images.append(render_card(out_path=_out(number, len(images) + 1), **card_kwargs))
+    else:
+        images.append(render_card(out_path=_out(number), **card_kwargs))
+    rel = [str(p.relative_to(config.ROOT)) for p in images]
+    return {
+        "number": number,
+        "kind": "single",
+        "network": "a8",
+        "genre": genre["id"],
+        "source": source,
+        "item_code": program.item_code,
+        "item_name": program.name,
+        "short_name": copy.short_name,
+        "price": None,
+        "price_label": program.price_label,
+        "review_average": 0,
+        "review_count": 0,
+        "item_url": program.link,
+        "affiliate_url": program.link,
+        "impression": program.impression,
+        "image_path": rel[0],
+        "images": rel,
+        "headline": copy.headline,
+        "points": copy.points,
+        "caption": compose_a8_caption(copy, program),
         "status": "prepared",
         "created_at": storage.now_iso(),
     }
@@ -333,7 +405,7 @@ def write_insights_csv(posts: list[dict], path: Path = config.INSIGHTS_CSV) -> N
                 continue
             ins = p.get("insights") or {}
             title = p.get("title") or p.get("short_name", "")
-            price = "/".join(f"{it['price']}" for it in storage.post_items(p))
+            price = "/".join(str(it.get("price") or it.get("price_label") or "") for it in storage.post_items(p))
             w.writerow([p["number"], p.get("kind", "single"), p["genre"], title, price,
                         p.get("published_at", ""), p.get("permalink", ""),
                         *[ins.get(m, "") for m in metrics]])

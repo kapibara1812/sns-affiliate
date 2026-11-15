@@ -46,6 +46,10 @@ class Settings:
     roundup_weekdays: str = field(default_factory=lambda: _env("ROUNDUP_WEEKDAYS", "3,6"))
     roundup_size: int = field(default_factory=lambda: int(_env("ROUNDUP_SIZE", "5")))
 
+    # A8.net: 自動モードで A8 案件を投稿する曜日（1=月 … 7=日）と、同じ案件を再投稿するまでの日数
+    a8_weekdays: str = field(default_factory=lambda: _env("A8_WEEKDAYS", "1,4"))
+    a8_cooldown_days: int = field(default_factory=lambda: int(_env("A8_COOLDOWN_DAYS", "14")))
+
     # Claude
     claude_model: str = field(default_factory=lambda: _env("CLAUDE_MODEL", "claude-opus-5-5"))
 

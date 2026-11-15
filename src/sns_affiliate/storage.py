@@ -50,5 +50,6 @@ def post_items(post: dict) -> list[dict]:
     if post.get("kind") == "roundup":
         return post["items"]
     return [{k: post.get(k) for k in ("item_code", "item_name", "short_name", "price", "review_average",
-                                      "review_count", "item_url", "affiliate_url")}
+                                      "review_count", "item_url", "affiliate_url", "network", "impression",
+                                      "price_label")}
             | {"image": post["image_path"]}]

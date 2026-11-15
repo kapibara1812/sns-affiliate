@@ -86,7 +86,7 @@ a.item img {{ width:84px; height:105px; object-fit:cover; border-radius:8px; fle
 ITEM = """<a class="item" href="{url}" target="_blank" rel="sponsored noopener" data-num="{num}" data-genre="{genre}" data-text="{text}">
   <img src="{img}" alt="" loading="lazy">
   <div><div class="num">#{num3} ・ {genre_label}</div><div class="name">{name}</div><div class="meta">{meta}</div></div>
-  <span class="cta">楽天で見る</span>
+  <span class="cta">{cta}</span>{pixel}
 </a>"""
 
 
@@ -105,7 +105,8 @@ def build_site(posts: list[dict], genres: list[dict], title: str, out_dir: Path 
         roundup = p.get("kind") == "roundup"
         for i, it in enumerate(items, start=1):
             label = f"{p['number']:03d}-{i}" if roundup else f"{p['number']:03d}"
-            meta = f"¥{it['price']:,}"
+            is_a8 = it.get("network") == "a8"
+            meta = f"¥{it['price']:,}" if it.get("price") else (it.get("price_label") or "公式サイトで詳細を確認")
             if roundup and p.get("title"):
                 meta += f" ・ {p['title']}"
             rows.append(ITEM.format(
@@ -118,6 +119,9 @@ def build_site(posts: list[dict], genres: list[dict], title: str, out_dir: Path 
                 img=escape(f"images/{Path(it.get('image') or p['image_path']).name}"),
                 name=escape(it.get("short_name") or it["item_name"]),
                 meta=escape(meta),
+                cta="公式サイトを見る" if is_a8 else "楽天で見る",
+                pixel=(f'<img src="{escape(it["impression"])}" width="1" height="1" alt="" '
+                       'style="position:absolute;width:1px;height:1px;border:0">' if it.get("impression") else ""),
             ))
     items = "\n".join(rows)
     out_dir.mkdir(parents=True, exist_ok=True)
