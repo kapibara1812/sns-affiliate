@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>おすすめアイテムまとめ</title>
+<style>
+:root { --bg:#f8fafc; --card:#fff; --text:#0f172a; --muted:#64748b; --accent:#bf0000; --line:#e2e8f0; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg:#0b1120; --card:#111827; --text:#e5e7eb; --muted:#94a3b8; --accent:#f87171; --line:#1f2937; }
+}
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", sans-serif; }
+main { max-width:560px; margin:0 auto; padding:20px 16px 48px; }
+h1 { font-size:20px; margin:8px 0 4px; }
+.note { font-size:12px; color:var(--muted); margin:0 0 16px; line-height:1.6; }
+input { width:100%; padding:12px 14px; font-size:16px; border:1px solid var(--line);
+  border-radius:12px; background:var(--card); color:var(--text); margin-bottom:12px; }
+.chips { display:flex; gap:8px; overflow-x:auto; padding-bottom:12px; }
+.chip { flex:none; border:1px solid var(--line); background:var(--card); color:var(--text);
+  border-radius:999px; padding:6px 12px; font-size:13px; cursor:pointer; }
+.chip[aria-pressed=true] { background:var(--text); color:var(--bg); }
+a.item { display:flex; gap:12px; align-items:center; text-decoration:none; color:inherit;
+  background:var(--card); border:1px solid var(--line); border-radius:14px; padding:10px; margin-bottom:10px; }
+a.item img { width:84px; height:105px; object-fit:cover; border-radius:8px; flex:none; }
+.num { font-weight:700; color:var(--accent); font-size:13px; }
+.name { font-size:14px; line-height:1.4; margin:2px 0 4px; }
+.meta { font-size:12px; color:var(--muted); }
+.cta { margin-left:auto; flex:none; font-size:12px; font-weight:700; color:#fff; background:#bf0000;
+  border-radius:999px; padding:8px 10px; }
+</style>
+</head>
+<body>
+<main>
+<h1>おすすめアイテムまとめ</h1>
+<p class="note">当ページは楽天アフィリエイトを利用した広告（PR）を含みます。価格・在庫は投稿時点の情報です。最新情報は販売ページでご確認ください。</p>
+<input id="q" type="search" inputmode="numeric" placeholder="投稿の番号（例: 12）や商品名で検索">
+<div class="chips" id="chips"><button class="chip" type="button" aria-pressed="false" data-genre="gadget">ガジェット</button><button class="chip" type="button" aria-pressed="false" data-genre="travel">旅行</button><button class="chip" type="button" aria-pressed="false" data-genre="training">トレーニング</button><button class="chip" type="button" aria-pressed="false" data-genre="appliance">家電</button><button class="chip" type="button" aria-pressed="false" data-genre="book">本</button><button class="chip" type="button" aria-pressed="false" data-genre="investment">投資</button></div>
+<div id="list">
+
+</div>
+</main>
+<script>
+(function () {
+  var q = document.getElementById('q'), active = '';
+  var items = Array.prototype.slice.call(document.querySelectorAll('a.item'));
+  function apply() {
+    var v = q.value.trim().replace(/^#/, '').toLowerCase();
+    items.forEach(function (el) {
+      var okText = !v || el.dataset.num === String(parseInt(v, 10)) || el.dataset.text.indexOf(v) >= 0;
+      var okGenre = !active || el.dataset.genre === active;
+      el.style.display = okText && okGenre ? '' : 'none';
+    });
+  }
+  q.addEventListener('input', apply);
+  document.getElementById('chips').addEventListener('click', function (e) {
+    var b = e.target.closest('.chip'); if (!b) return;
+    active = active === b.dataset.genre ? '' : b.dataset.genre;
+    document.querySelectorAll('.chip').forEach(function (c) {
+      c.setAttribute('aria-pressed', c.dataset.genre === active ? 'true' : 'false');
+    });
+    apply();
+  });
+  var m = location.hash.match(/^#(\d+)$/); if (m) { q.value = m[1]; apply(); }
+})();
+</script>
+</body>
+</html>
