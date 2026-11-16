@@ -34,11 +34,23 @@
 
 > 💡 報酬は楽天ポイントで受け取ります（条件を満たせば現金化も可能）。
 
-## STEP 2. 楽天のAPI（商品情報を取る仕組み）を使えるようにする（10分）
+## STEP 2. 楽天のAPI（商品情報を取る仕組み）を使えるようにする（15分）
 
-1. https://webservice.rakuten.co.jp/ を開き、「アプリID発行」を押す
-2. アプリ名は「sns-affiliate」など自由に決め、URLには GitHub のページ（STEP 5 で作るもの。あとで変更可）を入れる
-3. 発行された **アプリID**（アクセスキーも表示されたらそれも）をメモ帳に控える
+> 楽天のAPIは2026年に新しい仕組みへ移行しました。以前の手順で作ったIDは使えません。
+
+1. https://webservice.rakuten.co.jp/app/list を開き、楽天会員でログインする
+2. 「**+ New App**（新規アプリ登録）」を押し、次のように入力する
+   - **アプリ名**：`sns-affiliate`（自由）
+   - **アプリURL**：`https://kapibara1812.github.io/sns-affiliate/`（STEP 5 の一覧ページのURL）
+   - **Allowed websites（許可されたWebサイト）**：`kapibara1812.github.io`（`https://` と最後の `/` は付けない）
+   - **APIアクセススコープ**：「**楽天市場API**」にチェック
+3. 登録後のアプリの画面で、次の3つを**メモ帳に控える**
+   - **アプリID**（applicationId。UUID形式の長い英数字）
+   - **アクセスキー**（accessKey。`pk_` で始まる文字列）
+   - **アフィリエイトID**（affiliateId）
+
+> 💡 アフィリエイトIDが見つからない場合：楽天アフィリエイトの画面上部「URLを入力してリンクを作成」で商品のリンクを作ると、
+> `https://hb.afl.rakuten.co.jp/hgc/〇〇〇/...` の **`/hgc/` の次の部分**がアフィリエイトIDです。
 
 ## STEP 3. Instagram をプロアカウントにする（10分）
 
@@ -85,7 +97,7 @@ GitHub は、このツールを置いて毎日自動で動かすための無料�
 |---|---|
 | `ANTHROPIC_API_KEY` | STEP 6 の Claude の鍵 |
 | `RAKUTEN_APP_ID` | STEP 2 のアプリID |
-| `RAKUTEN_ACCESS_KEY` | STEP 2 のアクセスキー（なければ登録しない） |
+| `RAKUTEN_ACCESS_KEY` | STEP 2 のアクセスキー（`pk_` で始まるもの） |
 | `RAKUTEN_AFFILIATE_ID` | STEP 1 のアフィリエイトID |
 | `IG_USER_ID` | STEP 4 のユーザーID |
 | `IG_ACCESS_TOKEN` | STEP 4 のアクセストークン |

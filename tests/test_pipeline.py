@@ -344,3 +344,52 @@ def test_generate_a8_retries_on_ng_words():
     copy = Gen().generate_a8(program, config.load_genres()[1], 3)
     assert copy.headline == "お得に予約"
     assert "最安" in prompts[1]
+
+
+def test_rakuten_request_has_new_api_auth_and_referer():
+    from sns_affiliate.rakuten import RakutenClient
+
+    captured = {}
+
+    class Resp:
+        status_code = 200
+
+        def json(self):
+            return {"Items": [{"itemCode": "s:1", "itemName": "n", "itemPrice": 100, "itemUrl": "u",
+                               "affiliateUrl": "a", "mediumImageUrls": ["https://x/img.jpg?_ex=128x128"]}]}
+
+    class Session:
+        def get(self, url, params, headers, timeout):
+            captured.update(url=url, params=params, headers=headers)
+            return Resp()
+
+    s = config.Settings()
+    s.rakuten_app_id, s.rakuten_access_key, s.rakuten_affiliate_id = "app", "pk_key", "aff"
+    s.public_base_url = "https://kapibara1812.github.io/sns-affiliate"
+    items = RakutenClient(s, session=Session()).search("イヤホン")
+    assert captured["url"].startswith("https://openapi.rakuten.co.jp/")
+    assert captured["params"]["accessKey"] == "pk_key" and captured["params"]["applicationId"] == "app"
+    assert captured["headers"]["Origin"] == "https://kapibara1812.github.io"
+    assert captured["headers"]["Referer"] == "https://kapibara1812.github.io/sns-affiliate/"
+    assert items[0].image_url.endswith("_ex=600x600")
+
+
+def test_rakuten_403_explains_allowed_websites():
+    from sns_affiliate.rakuten import RakutenClient
+
+    class Resp:
+        status_code = 403
+        text = "forbidden"
+
+        def json(self):
+            return {"errors": {"errorCode": 403, "errorMessage": "REFERRER_MISSING"}}
+
+    class Session:
+        def get(self, *a, **k):
+            return Resp()
+
+    s = config.Settings()
+    s.rakuten_app_id, s.rakuten_access_key, s.rakuten_affiliate_id = "app", "pk", "aff"
+    s.public_base_url = "https://kapibara1812.github.io/sns-affiliate"
+    with pytest.raises(RuntimeError, match="許可されたWebサイト"):
+        RakutenClient(s, session=Session()).search("x")

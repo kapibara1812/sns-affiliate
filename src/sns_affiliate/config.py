@@ -35,7 +35,7 @@ class Settings:
     rakuten_search_url: str = field(
         default_factory=lambda: _env(
             "RAKUTEN_ITEM_SEARCH_URL",
-            "https://app.rakuten.co.jp/services/api/IchibaItem/Search/20220601",
+            "https://openapi.rakuten.co.jp/ichibams/api/IchibaItem/Search/20260701",
         )
     )
     min_review_count: int = field(default_factory=lambda: int(_env("MIN_REVIEW_COUNT", "30")))

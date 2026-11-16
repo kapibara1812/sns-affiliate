@@ -69,8 +69,8 @@ A8.net には商品検索の公開APIがないため、提携した案件を `co
 ### 1. 楽天
 
 1. [楽天アフィリエイト](https://affiliate.rakuten.co.jp/) に登録し、**アフィリエイトID**を控える
-2. [Rakuten Developers](https://webservice.rakuten.co.jp/) でアプリを登録し、**アプリID**を控える（**アクセスキー**が発行された場合はそれも控える）
-   - API のエンドポイントが変わった場合は、環境変数 `RAKUTEN_ITEM_SEARCH_URL` で上書きできます
+2. [Rakuten Developers](https://webservice.rakuten.co.jp/app/list) でアプリを登録し、**アプリID**と**アクセスキー**を控える。"Allowed websites" には GitHub Pages のドメイン（例 `kapibara1812.github.io`）を、APIアクセススコープには「楽天市場API」を設定する
+   - 2026年の新API（`openapi.rakuten.co.jp`、IchibaItem/Search 20260701 版）に対応しています。APIのURLが変わった場合は、環境変数 `RAKUTEN_ITEM_SEARCH_URL` で上書きできます
 
 ### 2. Instagram
 
@@ -93,7 +93,7 @@ A8.net には商品検索の公開APIがないため、提携した案件を `co
 |---|---|---|
 | Secret | `ANTHROPIC_API_KEY` | Claude API キー |
 | Secret | `RAKUTEN_APP_ID` | 楽天アプリID |
-| Secret | `RAKUTEN_ACCESS_KEY` | 楽天アクセスキー（発行された場合のみ） |
+| Secret | `RAKUTEN_ACCESS_KEY` | 楽天アクセスキー（必須） |
 | Secret | `RAKUTEN_AFFILIATE_ID` | 楽天アフィリエイトID |
 | Secret | `IG_USER_ID` | Instagram ユーザーID |
 | Secret | `IG_ACCESS_TOKEN` | Instagram 長期アクセストークン |
