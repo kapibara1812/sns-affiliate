@@ -56,7 +56,8 @@ class Settings:
     # Instagram (Instagram API with Instagram Login)
     ig_user_id: str = field(default_factory=lambda: _env("IG_USER_ID"))
     ig_access_token: str = field(default_factory=lambda: _env("IG_ACCESS_TOKEN"))
-    ig_api_base: str = field(default_factory=lambda: _env("IG_API_BASE", "https://graph.instagram.com/v23.0"))
+    # 空欄ならトークンの種類から自動で決める（ig_api_url を参照）
+    ig_api_base: str = field(default_factory=lambda: _env("IG_API_BASE"))
     ig_insight_metrics: str = field(
         default_factory=lambda: _env("IG_INSIGHT_METRICS", "reach,views,likes,comments,saved,shares")
     )
@@ -68,6 +69,19 @@ class Settings:
 
     # 商品画像をカードに載せるか。楽天の規約・画像の権利を確認したうえで有効化してください。
     use_product_image: bool = field(default_factory=lambda: _env_bool("USE_PRODUCT_IMAGE", False))
+
+
+def ig_api_url(settings: "Settings") -> str:
+    """Instagram API の接続先.
+
+    - EAA で始まるトークン: Facebook 経由（統合ログイン / システムユーザートークン。無期限）
+    - IGAA などそれ以外  : Instagram ログイン（60日で期限切れ）
+    """
+    if settings.ig_api_base:
+        return settings.ig_api_base.rstrip("/")
+    if settings.ig_access_token.startswith("EAA"):
+        return "https://graph.facebook.com/v23.0"
+    return "https://graph.instagram.com/v23.0"
 
 
 def load_genres() -> list[dict]:

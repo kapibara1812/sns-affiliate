@@ -6,7 +6,7 @@ import time
 
 import requests
 
-from .config import Settings
+from .config import Settings, ig_api_url
 
 
 class InstagramError(RuntimeError):
@@ -24,7 +24,7 @@ class InstagramClient:
 
     def _request(self, method: str, path: str, **params) -> dict:
         params["access_token"] = self.s.ig_access_token
-        url = f"{self.s.ig_api_base}/{path.lstrip('/')}"
+        url = f"{ig_api_url(self.s)}/{path.lstrip('/')}"
         resp = self.session.request(method, url, params=params, timeout=30)
         data = resp.json() if resp.content else {}
         if resp.status_code >= 400 or "error" in data:
@@ -74,7 +74,12 @@ class InstagramClient:
         return result
 
     def refresh_token(self) -> dict:
-        """長期アクセストークン（60日）を更新する。発行から24時間以上経過している必要あり."""
+        """長期アクセストークン（60日）を更新する。発行から24時間以上経過している必要あり.
+
+        EAA で始まるシステムユーザートークン（統合ログイン）は無期限なので更新不要.
+        """
+        if self.s.ig_access_token.startswith("EAA"):
+            raise InstagramError("このトークン（EAA〜）は無期限のシステムユーザートークンなので、更新は不要です")
         resp = self.session.get(
             "https://graph.instagram.com/refresh_access_token",
             params={"grant_type": "ig_refresh_token", "access_token": self.s.ig_access_token},

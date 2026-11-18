@@ -75,9 +75,9 @@ A8.net には商品検索の公開APIがないため、提携した案件を `co
 ### 2. Instagram
 
 1. Instagram アカウントを**プロアカウント（ビジネスまたはクリエイター）**に切り替える
-2. [Meta for Developers](https://developers.facebook.com/) でアプリを作成し、「Instagram API（Instagramログイン）」を追加する
-3. 権限 `instagram_business_basic` と `instagram_business_content_publish`（インサイトを取るなら `instagram_business_manage_insights` も）を付けて、**長期アクセストークン**と **Instagram ユーザーID** を取得する
-4. トークンの有効期限は60日です。月に1回 `python -m sns_affiliate refresh-token` を実行し、出力された新しいトークンで Secret を更新してください
+2. [Meta for Developers](https://developers.facebook.com/) でアプリを作成し、Instagram のユースケースの「**API setup with Unified login**」で設定を作る（ビジネスポートフォリオが必要。無料）
+3. アクセス許可 `instagram_basic`・`instagram_content_publish`・`instagram_manage_insights` で設定を作り、投稿用アカウントを追加して**システムユーザーアクセストークン**（`EAA...`、無期限）と **Instagram ユーザーID**（`1784...`）を取得する
+4. トークンの種類から接続先を自動で選びます（`EAA...` → `graph.facebook.com`、`IGAA...` → `graph.instagram.com`）。変えたい場合は `IG_API_BASE` で上書きできます
 
 ### 3. Claude
 
