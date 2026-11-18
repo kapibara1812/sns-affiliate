@@ -69,15 +69,15 @@ A8.net には商品検索の公開APIがないため、提携した案件を `co
 ### 1. 楽天
 
 1. [楽天アフィリエイト](https://affiliate.rakuten.co.jp/) に登録し、**アフィリエイトID**を控える
-2. [Rakuten Developers](https://webservice.rakuten.co.jp/) でアプリを登録し、**アプリID**を控える（**アクセスキー**が発行された場合はそれも控える）
-   - API のエンドポイントが変わった場合は、環境変数 `RAKUTEN_ITEM_SEARCH_URL` で上書きできます
+2. [Rakuten Developers](https://webservice.rakuten.co.jp/app/list) でアプリを登録し、**アプリID**と**アクセスキー**を控える。"Allowed websites" には GitHub Pages のドメイン（例 `kapibara1812.github.io`）を、APIアクセススコープには「楽天市場API」を設定する
+   - 2026年の新API（`openapi.rakuten.co.jp`、IchibaItem/Search 20260701 版）に対応しています。APIのURLが変わった場合は、環境変数 `RAKUTEN_ITEM_SEARCH_URL` で上書きできます
 
 ### 2. Instagram
 
 1. Instagram アカウントを**プロアカウント（ビジネスまたはクリエイター）**に切り替える
-2. [Meta for Developers](https://developers.facebook.com/) でアプリを作成し、「Instagram API（Instagramログイン）」を追加する
-3. 権限 `instagram_business_basic` と `instagram_business_content_publish`（インサイトを取るなら `instagram_business_manage_insights` も）を付けて、**長期アクセストークン**と **Instagram ユーザーID** を取得する
-4. トークンの有効期限は60日です。月に1回 `python -m sns_affiliate refresh-token` を実行し、出力された新しいトークンで Secret を更新してください
+2. [Meta for Developers](https://developers.facebook.com/) でアプリを作成し、Instagram のユースケースの「**API setup with Unified login**」で設定を作る（ビジネスポートフォリオが必要。無料）
+3. アクセス許可 `instagram_basic`・`instagram_content_publish`・`instagram_manage_insights` で設定を作り、投稿用アカウントを追加して**システムユーザーアクセストークン**（`EAA...`、無期限）と **Instagram ユーザーID**（`1784...`）を取得する
+4. トークンの種類から接続先を自動で選びます（`EAA...` → `graph.facebook.com`、`IGAA...` → `graph.instagram.com`）。変えたい場合は `IG_API_BASE` で上書きできます
 
 ### 3. Claude
 
@@ -93,7 +93,7 @@ A8.net には商品検索の公開APIがないため、提携した案件を `co
 |---|---|---|
 | Secret | `ANTHROPIC_API_KEY` | Claude API キー |
 | Secret | `RAKUTEN_APP_ID` | 楽天アプリID |
-| Secret | `RAKUTEN_ACCESS_KEY` | 楽天アクセスキー（発行された場合のみ） |
+| Secret | `RAKUTEN_ACCESS_KEY` | 楽天アクセスキー（必須） |
 | Secret | `RAKUTEN_AFFILIATE_ID` | 楽天アフィリエイトID |
 | Secret | `IG_USER_ID` | Instagram ユーザーID |
 | Secret | `IG_ACCESS_TOKEN` | Instagram 長期アクセストークン |

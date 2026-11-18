@@ -344,3 +344,97 @@ def test_generate_a8_retries_on_ng_words():
     copy = Gen().generate_a8(program, config.load_genres()[1], 3)
     assert copy.headline == "お得に予約"
     assert "最安" in prompts[1]
+
+
+def test_rakuten_request_has_new_api_auth_and_referer():
+    from sns_affiliate.rakuten import RakutenClient
+
+    captured = {}
+
+    class Resp:
+        status_code = 200
+
+        def json(self):
+            return {"Items": [{"itemCode": "s:1", "itemName": "n", "itemPrice": 100, "itemUrl": "u",
+                               "affiliateUrl": "a", "mediumImageUrls": ["https://x/img.jpg?_ex=128x128"]}]}
+
+    class Session:
+        def get(self, url, params, headers, timeout):
+            captured.update(url=url, params=params, headers=headers)
+            return Resp()
+
+    s = config.Settings()
+    s.rakuten_app_id, s.rakuten_access_key, s.rakuten_affiliate_id = "app", "pk_key", "aff"
+    s.public_base_url = "https://kapibara1812.github.io/sns-affiliate"
+    items = RakutenClient(s, session=Session()).search("イヤホン")
+    assert captured["url"].startswith("https://openapi.rakuten.co.jp/")
+    assert captured["params"]["accessKey"] == "pk_key" and captured["params"]["applicationId"] == "app"
+    assert captured["headers"]["Origin"] == "https://kapibara1812.github.io"
+    assert captured["headers"]["Referer"] == "https://kapibara1812.github.io/sns-affiliate/"
+    assert items[0].image_url.endswith("_ex=600x600")
+
+
+def test_rakuten_403_explains_allowed_websites():
+    from sns_affiliate.rakuten import RakutenClient
+
+    class Resp:
+        status_code = 403
+        text = "forbidden"
+
+        def json(self):
+            return {"errors": {"errorCode": 403, "errorMessage": "REFERRER_MISSING"}}
+
+    class Session:
+        def get(self, *a, **k):
+            return Resp()
+
+    s = config.Settings()
+    s.rakuten_app_id, s.rakuten_access_key, s.rakuten_affiliate_id = "app", "pk", "aff"
+    s.public_base_url = "https://kapibara1812.github.io/sns-affiliate"
+    with pytest.raises(RuntimeError, match="許可されたWebサイト"):
+        RakutenClient(s, session=Session()).search("x")
+
+
+def test_ig_api_url_follows_token_type():
+    s = config.Settings()
+    s.ig_api_base = ""
+    s.ig_access_token = "EAAUxxxx"
+    assert config.ig_api_url(s) == "https://graph.facebook.com/v23.0"
+    s.ig_access_token = "IGAAxxxx"
+    assert config.ig_api_url(s) == "https://graph.instagram.com/v23.0"
+    s.ig_api_base = "https://graph.facebook.com/v25.0/"
+    assert config.ig_api_url(s) == "https://graph.facebook.com/v25.0"
+
+
+def test_instagram_carousel_calls_facebook_graph_with_eaa_token():
+    from sns_affiliate.instagram import InstagramClient
+
+    calls = []
+
+    class Resp:
+        def __init__(self, data):
+            self._data, self.status_code, self.content, self.text = data, 200, b"x", ""
+
+        def json(self):
+            return self._data
+
+    class Session:
+        def request(self, method, url, params, timeout):
+            calls.append((method, url, dict(params)))
+            if url.endswith("/media") and params.get("media_type") == "CAROUSEL":
+                return Resp({"id": "parent"})
+            if url.endswith("/media"):
+                return Resp({"id": f"child{len(calls)}"})
+            if url.endswith("/media_publish"):
+                return Resp({"id": "m1"})
+            if "fields" in params and "status_code" in params["fields"]:
+                return Resp({"status_code": "FINISHED"})
+            return Resp({"permalink": "https://instagram.com/p/abc"})
+
+    s = config.Settings()
+    s.ig_api_base, s.ig_user_id, s.ig_access_token = "", "17841400000000000", "EAAUtoken"
+    out = InstagramClient(s, session=Session(), poll_interval=0).publish(["https://a/1.jpg", "https://a/2.jpg"], "cap")
+    assert out == {"id": "m1", "permalink": "https://instagram.com/p/abc", "timestamp": None}
+    assert all(url.startswith("https://graph.facebook.com/v23.0/") for _, url, _ in calls)
+    parent = [c for c in calls if c[2].get("media_type") == "CAROUSEL"][0]
+    assert parent[2]["children"].count(",") == 1 and parent[2]["caption"] == "cap"
