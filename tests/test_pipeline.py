@@ -438,3 +438,37 @@ def test_instagram_carousel_calls_facebook_graph_with_eaa_token():
     assert all(url.startswith("https://graph.facebook.com/v23.0/") for _, url, _ in calls)
     parent = [c for c in calls if c[2].get("media_type") == "CAROUSEL"][0]
     assert parent[2]["children"].count(",") == 1 and parent[2]["caption"] == "cap"
+
+
+def _no_rakuten(s):
+    s.rakuten_app_id = s.rakuten_access_key = s.rakuten_affiliate_id = ""
+    return s
+
+
+def test_a8_only_when_rakuten_not_configured(tmp_project):
+    _write_programs(tmp_project)
+    s = _no_rakuten(config.Settings())
+    # A8 曜日でなくても、楽天が未設定なら A8 案件を使う（is_a8_day はフィクスチャで False）
+    post = pipeline.prepare(s, writer=FakeWriter())
+    assert post["network"] == "a8"
+    post2 = pipeline.prepare(s, writer=FakeWriter())
+    assert {post["item_code"], post2["item_code"]} == {"a8:trip", "a8:gym"}
+    # 使える案件がクールダウン中なら、エラーではなく「お休み」
+    with pytest.raises(pipeline.NothingToPost, match="直近"):
+        pipeline.prepare(s, writer=FakeWriter())
+
+
+def test_nothing_to_post_without_rakuten_or_a8(tmp_project):
+    s = _no_rakuten(config.Settings())
+    with pytest.raises(pipeline.NothingToPost, match="A8 案件"):
+        pipeline.prepare(s, writer=FakeWriter())
+
+
+def test_cli_prepare_rests_quietly(tmp_project, monkeypatch, capsys):
+    from sns_affiliate import __main__ as cli
+
+    for k in ("RAKUTEN_APP_ID", "RAKUTEN_ACCESS_KEY", "RAKUTEN_AFFILIATE_ID"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
+    assert cli.main(["prepare"]) == 0
+    assert "お休み" in capsys.readouterr().out

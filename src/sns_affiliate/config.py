@@ -71,6 +71,11 @@ class Settings:
     use_product_image: bool = field(default_factory=lambda: _env_bool("USE_PRODUCT_IMAGE", False))
 
 
+def rakuten_ready(settings: "Settings") -> bool:
+    """楽天の3つのキーがそろっているか（そろうまでは A8.net だけで運用する）."""
+    return bool(settings.rakuten_app_id and settings.rakuten_access_key and settings.rakuten_affiliate_id)
+
+
 def ig_api_url(settings: "Settings") -> str:
     """Instagram API の接続先.
 
