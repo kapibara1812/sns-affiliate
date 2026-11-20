@@ -79,6 +79,9 @@ class Theme:
         self.marker = _hex(g.get("marker", "#FFE27A"))  # 蛍光マーカー
         self.card = _hex(g.get("card", "#FFFFFF"))
         self.dot = _hex(g.get("dot", "#E7DDC8"))
+        # 背景: plain（無地の紙）/ watercolor（水彩のにじみ）/ gradient（やわらかいグラデーション）/
+        #       linen（布のような織り目）/ dots（方眼ノート）
+        self.background = g.get("background", "watercolor")
         tapes = g.get("tapes") or ["#BFE3D0", "#F7C9C4", "#FBE7A1", "#CFE0F7"]
         self.tapes = [_hex(t) for t in tapes]
         self.genre_id = g.get("id", "")
@@ -264,17 +267,51 @@ def _fit_lines(draw, text: str, weight: str, sizes: range, width: int, max_lines
 # ---------------------------------------------------------------------------
 
 def _paper(theme: Theme, seed: int, size=(WIDTH, HEIGHT)) -> Image.Image:
-    """クリーム色の紙。うっすら方眼の点と、紙の粒子を入れる."""
+    """背景の紙。theme.background で種類を切り替える（どれも最後に紙の粒子を薄くのせる）."""
     w, h = size
+    style = theme.background
     img = Image.new("RGB", size, theme.paper)
-    draw = ImageDraw.Draw(img)
-    step = 40
-    for y in range(step // 2, h, step):
-        for x in range(step // 2, w, step):
-            draw.ellipse((x - 2, y - 2, x + 2, y + 2), fill=theme.dot)
+    if style == "dots":
+        draw = ImageDraw.Draw(img)
+        for y in range(20, h, 40):
+            for x in range(20, w, 40):
+                draw.ellipse((x - 2, y - 2, x + 2, y + 2), fill=theme.dot)
+    elif style == "watercolor":
+        # 四隅に淡い水彩のにじみ（位置は投稿番号ごとに少し変わる）
+        r = _rng("wc", seed)
+        layer = Image.new("RGBA", size, (0, 0, 0, 0))
+        d = ImageDraw.Draw(layer)
+        corners = [(0, 0), (w, 0), (0, h), (w, h)]
+        r.shuffle(corners)
+        for i, (cx, cy) in enumerate(corners[:3]):
+            color = theme.tapes[(i + seed) % len(theme.tapes)]
+            rad = r.randint(int(w * 0.32), int(w * 0.48))
+            for k in range(5):  # 少しずつずらして重ね、にじみのムラを出す
+                ox, oy = r.randint(-60, 60), r.randint(-60, 60)
+                d.ellipse((cx - rad + ox, cy - rad + oy, cx + rad + ox, cy + rad + oy), fill=(*color, 70))
+        layer = layer.filter(ImageFilter.GaussianBlur(55))
+        img = Image.alpha_composite(img.convert("RGBA"), layer).convert("RGB")
+    elif style == "gradient":
+        top, bottom = theme.paper, _mix(theme.paper, theme.tapes[seed % len(theme.tapes)], 0.45)
+        grad = Image.new("RGB", (1, h))
+        for y in range(h):
+            grad.putpixel((0, y), _mix(top, bottom, y / max(1, h - 1)))
+        img = grad.resize(size)
+    elif style == "linen":
+        draw = ImageDraw.Draw(img)
+        line = _mix(theme.paper, theme.dot, 0.55)
+        for x in range(0, w, 6):
+            draw.line([(x, 0), (x, h)], fill=line, width=1)
+        for y in range(0, h, 6):
+            draw.line([(0, y), (w, y)], fill=line, width=1)
+        img = Image.blend(Image.new("RGB", size, theme.paper), img, 0.5)
     noise = Image.effect_noise(size, 18).convert("L")
     grain = Image.merge("RGB", [noise] * 3)
     return Image.blend(img, grain, 0.035)
+
+
+def _mix(a, b, t: float):
+    return tuple(int(a[i] + (b[i] - a[i]) * t) for i in range(3))
 
 
 def _rng(*parts) -> random.Random:
