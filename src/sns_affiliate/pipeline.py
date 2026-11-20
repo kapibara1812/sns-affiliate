@@ -571,12 +571,14 @@ def _subjects(settings: config.Settings, genres: list[dict], rakuten: RakutenCli
 
 def generate_drafts(settings: config.Settings, *, count: int | None = None, writer: CaptionGenerator | None = None,
                     rakuten: RakutenClient | None = None, rng: random.Random | None = None,
-                    render_previews: bool = True) -> list:
+                    render_previews: bool = True, image_gen=None) -> list:
     """③ ①でまとめた型を使って、下書きをまとめて作る（商品紹介:お役立ち = だいたい 7:3）."""
     from . import drafts as dr
+    from .imagegen import ImageGenerator
     from .research import load_patterns
 
     rng = rng or random.Random()
+    image_gen = image_gen or ImageGenerator(settings)
     count = count or settings.drafts_per_batch
     writer = writer or CaptionGenerator(settings.claude_model)
     genres = config.load_genres()
@@ -605,7 +607,7 @@ def generate_drafts(settings: config.Settings, *, count: int | None = None, writ
                      images=subj["images"], pattern=pattern["name"], audience=audience)
         dr.save(d)
         if render_previews:
-            dr.render_preview(d, settings.account_name)
+            dr.render_preview(d, settings.account_name, gen=image_gen)
         made.append(d)
     if render_previews:
         dr.build_page(settings.repo_slug)
@@ -613,7 +615,7 @@ def generate_drafts(settings: config.Settings, *, count: int | None = None, writ
 
 
 def remix_hits(settings: config.Settings, *, limit: int = 2, min_age_days: int = 7,
-               writer: CaptionGenerator | None = None, render_previews: bool = True) -> list:
+               writer: CaptionGenerator | None = None, render_previews: bool = True, image_gen=None) -> list:
     """④ 公開から1週間以上たった投稿のうち、保存数が多いものを、角度を変えた下書きにする（1投稿につき1回）."""
     from . import drafts as dr
     from .research import load_patterns
@@ -654,7 +656,9 @@ def remix_hits(settings: config.Settings, *, limit: int = 2, min_age_days: int =
                      remix_of=post["number"])
         dr.save(d)
         if render_previews:
-            dr.render_preview(d, settings.account_name)
+            from .imagegen import ImageGenerator
+
+            dr.render_preview(d, settings.account_name, gen=image_gen or ImageGenerator(settings))
         post["remixed"] = True
         made.append(d)
     storage.save_posts(posts)
@@ -663,7 +667,7 @@ def remix_hits(settings: config.Settings, *, limit: int = 2, min_age_days: int =
     return made
 
 
-def publish_draft(settings: config.Settings) -> dict:
+def publish_draft(settings: config.Settings, image_gen=None) -> dict:
     """承認済みの下書きを1本、投稿データにする（このあと publish で Instagram に公開）."""
     from . import drafts as dr
     from .caption import PR_LINE, _with_pr
@@ -674,16 +678,20 @@ def publish_draft(settings: config.Settings) -> dict:
     posts = storage.load_posts()
     number = storage.next_number(posts)
     genre = dr.genre_for(d)
-    images = dr.render(d, config.IMAGES_DIR, number, settings.account_name, prefix=f"{number:04d}-")
+    from .imagegen import ImageGenerator
+
+    images = dr.render(d, config.IMAGES_DIR, number, settings.account_name, prefix=f"{number:04d}-",
+                       gen=image_gen or ImageGenerator(settings))
+    ai_note = "\n※一部の画像はAIで作成したイメージです" if dr.uses_ai_images(d) else ""
     rel = [str(p.relative_to(config.ROOT)) for p in images]
     tags = d.copy.hashtags
     if d.kind == "tips":
-        caption = f"{d.copy.caption}\n\n" + " ".join(tags[:30])
+        caption = f"{d.copy.caption}{ai_note}\n\n" + " ".join(tags[:30])
     else:
         lead = PR_LINE if d.kind == "rakuten" else "【PR】A8.netのアフィリエイト広告を利用しています"
         price = f"💰 {d.price_label}（投稿時点）\n" if d.price_label else ""
         caption = (f"{lead}\n\n{d.copy.caption}\n\n🛒 詳しくはプロフィールのリンク → #{number:03d}\n{price}"
-                   "※料金・条件は変わることがあります。最新の内容は販売ページ・公式サイトでご確認ください\n\n" + _with_pr(tags))
+                   "※料金・条件は変わることがあります。最新の内容は販売ページ・公式サイトでご確認ください" + ai_note + "\n\n" + _with_pr(tags))
     post = {
         "number": number,
         "kind": "single",

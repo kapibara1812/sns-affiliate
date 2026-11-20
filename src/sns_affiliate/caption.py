@@ -138,9 +138,15 @@ EXPLAINER_SCHEMA = {
         "fit": _strs("こんな人に向いている、を3つ。各全角22文字以内。"),
         "caption": _str("キャプション本文（ハッシュタグは含めない）。300〜600文字。保存を促す一文を入れる。"),
         "hashtags": HASHTAGS_SCHEMA,
+        "cover_image_prompt": _str(
+            "表紙に入れるイラストの説明（英語、1〜2文）。テーマが一目で分かるモノや場面を描く。"
+            "実在の商品・ブランド・ロゴ・文字・リアルな人物は入れない。例: 'A protein shaker and a towel on a gym bench'"),
+        "scene_image_prompt": _str(
+            "使用シーンのイメージ画像の説明（英語、1〜2文）。紹介するものが役立つ場面の雰囲気を描く。"
+            "実在の商品・ブランド・ロゴ・文字・リアルな人物は入れない。人を描くなら顔のないシンプルな人物。"),
     },
     "required": ["cover_hook", "cover_sub", "short_name", "pains_title", "pains", "compare", "steps_title",
-                 "steps", "features", "fit", "caption", "hashtags"],
+                 "steps", "features", "fit", "caption", "hashtags", "cover_image_prompt", "scene_image_prompt"],
     "additionalProperties": False,
 }
 
@@ -188,6 +194,8 @@ class ExplainerCopy:
     fit: list[str]
     caption: str
     hashtags: list[str]
+    cover_image_prompt: str = ""
+    scene_image_prompt: str = ""
 
     def all_text(self) -> list[str]:
         out = [self.cover_hook, self.cover_sub, self.short_name, self.pains_title, *self.pains,
@@ -225,6 +233,8 @@ def parse_explainer(data: dict) -> ExplainerCopy:
         fit=[x.strip() for x in data["fit"] if x.strip()][:3],
         caption=data["caption"].strip(),
         hashtags=normalize_hashtags(data["hashtags"]),
+        cover_image_prompt=(data.get("cover_image_prompt") or "").strip(),
+        scene_image_prompt=(data.get("scene_image_prompt") or "").strip(),
     )
 
 

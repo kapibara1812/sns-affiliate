@@ -16,8 +16,9 @@ from pathlib import Path
 
 from . import config, storage
 from .caption import ExplainerCopy
-from .image_card import (render_compare_slide, render_cta_slide, render_explainer_cover, render_list_slide,
-                         render_official_image_slide, render_steps_slide)
+from .image_card import (render_compare_slide, render_cta_slide, render_explainer_cover, render_illustrated_cover,
+                         render_list_slide, render_official_image_slide, render_scene_slide, render_steps_slide)
+from .imagegen import ImageGenerator, prompt_hash
 
 KIND_LABELS = {"a8": "A8.net 案件", "rakuten": "楽天の商品", "tips": "お役立ち（広告なし）"}
 _KIND_FROM_LABEL = {v: k for k, v in KIND_LABELS.items()}
@@ -99,6 +100,10 @@ def to_markdown(d: Draft) -> str:
         "## こんな人に",
         *[f"- {x}" for x in c.fit],
         "",
+        "## 画像（AIで作るイラストの指示。英語で書く。変えるとその画像だけ作り直す。空欄なら画像なし）",
+        f"表紙: {c.cover_image_prompt}",
+        f"シーン: {c.scene_image_prompt}",
+        "",
         "## キャプション",
         c.caption,
         "",
@@ -157,6 +162,8 @@ def from_markdown(text: str, path: Path | None = None) -> Draft:
         t, _, desc = it.partition("/")
         steps.append((t.strip(), desc.strip()))
     caption = "\n".join(sections.get("キャプション", [])).strip()
+    img_sec = next((k for k in sections if k.startswith("画像")), "")
+    img_kv = kvs(img_sec) if img_sec else {}
     tags = " ".join(sections.get("ハッシュタグ", [])).split()
     copy = ExplainerCopy(
         cover_hook=kvs("表紙").get("大見出し", ""),
@@ -173,6 +180,8 @@ def from_markdown(text: str, path: Path | None = None) -> Draft:
         fit=items("こんな人に")[:3],
         caption=caption,
         hashtags=[t if t.startswith("#") else f"#{t}" for t in tags],
+        cover_image_prompt=img_kv.get("表紙", ""),
+        scene_image_prompt=img_kv.get("シーン", ""),
     )
     stem = path.stem if path else ""
     draft_id = int(stem) if stem.isdigit() else 0
@@ -255,6 +264,26 @@ def next_approved(today: date | None = None) -> Draft | None:
 # 画像
 # ---------------------------------------------------------------------------
 
+def _gen_path(d: Draft, kind: str, prompt: str) -> Path:
+    return config.DRAFTS_DIR / "images" / f"{d.id:04d}-{kind}-{prompt_hash(prompt)}.png"
+
+
+def generated_images(d: Draft, gen: ImageGenerator | None = None) -> dict[str, Path]:
+    """表紙のイラストとシーン画像。指示文が同じなら前に作ったものを使い回し、変わったときだけ作り直す."""
+    out: dict[str, Path] = {}
+    for kind, prompt in (("cover", d.copy.cover_image_prompt), ("scene", d.copy.scene_image_prompt)):
+        if not prompt:
+            continue
+        path = _gen_path(d, kind, prompt)
+        if not path.exists() and gen is not None and gen.enabled:
+            for old in path.parent.glob(f"{d.id:04d}-{kind}-*.png"):
+                old.unlink()
+            gen.generate(prompt, path, kind)
+        if path.exists():
+            out[kind] = path
+    return out
+
+
 def genre_for(d: Draft) -> dict:
     genres = {g["id"]: g for g in config.load_genres(include_disabled=True)}
     g = dict(genres.get(d.genre_id) or config.load_genres()[0])
@@ -263,17 +292,23 @@ def genre_for(d: Draft) -> dict:
     return g
 
 
-def render(d: Draft, out_dir: Path, number: int, account_name: str = "", prefix: str = "") -> list[Path]:
-    """表紙 → 悩み → 比較 → 手順 → 公式画像 → ポイント → こんな人に → まとめ（最大8枚）."""
+def render(d: Draft, out_dir: Path, number: int, account_name: str = "", prefix: str = "",
+           gen: ImageGenerator | None = None) -> list[Path]:
+    """表紙 → 悩み → 比較 → 手順 →（シーン）→ 公式画像 → ポイント → こんな人に → まとめ（最大10枚）."""
     ex, genre = d.copy, genre_for(d)
+    pics = generated_images(d, gen)
     n = [0]
 
     def out() -> Path:
         n[0] += 1
         return out_dir / f"{prefix}{n[0]:02d}.jpg"
 
-    slides = [render_explainer_cover(out_path=out(), number=number, genre=genre, hook=ex.cover_hook,
-                                     sub=ex.cover_sub, account_name=account_name)]
+    if "cover" in pics:
+        slides = [render_illustrated_cover(out_path=out(), number=number, genre=genre, hook=ex.cover_hook,
+                                           sub=ex.cover_sub, illustration=pics["cover"], account_name=account_name)]
+    else:
+        slides = [render_explainer_cover(out_path=out(), number=number, genre=genre, hook=ex.cover_hook,
+                                         sub=ex.cover_sub, account_name=account_name)]
     if ex.pains:
         slides.append(render_list_slide(out_path=out(), number=number, genre=genre, title=ex.pains_title,
                                         items=ex.pains, mark="pain"))
@@ -283,6 +318,9 @@ def render(d: Draft, out_dir: Path, number: int, account_name: str = "", prefix:
     if ex.steps:
         slides.append(render_steps_slide(out_path=out(), number=number, genre=genre, title=ex.steps_title,
                                          steps=ex.steps))
+    if "scene" in pics:
+        slides.append(render_scene_slide(out_path=out(), number=number, genre=genre, title="使うとこんなイメージ",
+                                          image=pics["scene"]))
     for url in d.images[:1]:
         path = render_official_image_slide(out_path=out_dir / f"{prefix}{n[0] + 1:02d}.jpg", number=number,
                                            genre=genre, title=ex.short_name, image_url=url)
@@ -375,12 +413,16 @@ def preview_dir(d: Draft) -> Path:
     return config.DRAFT_PREVIEW_DIR / f"{d.id:04d}"
 
 
-def render_preview(d: Draft, account_name: str = "") -> list[Path]:
+def render_preview(d: Draft, account_name: str = "", gen: ImageGenerator | None = None) -> list[Path]:
     out = preview_dir(d)
     if out.exists():
         for f in out.glob("*.jpg"):
             f.unlink()
-    return render(d, out, number=0, account_name=account_name)
+    return render(d, out, number=0, account_name=account_name, gen=gen)
+
+
+def uses_ai_images(d: Draft) -> bool:
+    return bool(generated_images(d))
 
 
 def build_page(repo_slug: str = "", branch: str = "main") -> Path:

@@ -61,6 +61,12 @@ class Settings:
     repo_slug: str = field(default_factory=lambda: _env("GITHUB_REPOSITORY") or _env("REPO_SLUG"))
     drafts_per_batch: int = field(default_factory=lambda: int(_env("DRAFTS_PER_BATCH", "10")))
 
+    # 画像生成（OpenAI）。キーがなければ画像生成はせず、これまでどおり文字と図だけで作る
+    openai_api_key: str = field(default_factory=lambda: _env("OPENAI_API_KEY"))
+    image_model: str = field(default_factory=lambda: _env("OPENAI_IMAGE_MODEL", "gpt-image-2"))
+    image_quality: str = field(default_factory=lambda: _env("OPENAI_IMAGE_QUALITY", "low"))  # low / medium / high
+    generate_images: bool = field(default_factory=lambda: _env_bool("GENERATE_IMAGES", True))
+
     # Claude
     claude_model: str = field(default_factory=lambda: _env("CLAUDE_MODEL", "claude-opus-5-5"))
 

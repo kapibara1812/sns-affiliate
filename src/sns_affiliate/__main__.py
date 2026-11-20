@@ -73,8 +73,11 @@ def cmd_drafts_preview(args, settings):
     targets = dr.list_drafts()
     if args.only:
         targets = [d for d in targets if d.id in set(args.only)]
+    from .imagegen import ImageGenerator
+
+    gen = ImageGenerator(settings)
     for d in targets:
-        dr.render_preview(d, settings.account_name)
+        dr.render_preview(d, settings.account_name, gen=gen)
     dr.build_page(settings.repo_slug)
     print(f"{len(targets)} 本の下書きの画像と、確認ページを作り直しました")
 

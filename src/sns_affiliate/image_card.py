@@ -977,3 +977,44 @@ def render_cta_slide(*, out_path: Path, number: int, genre: dict, short_name: st
         ImageDraw.Draw(img).text((WIDTH - MARGIN, HEIGHT - 44), f"@{account_name}", font=_font("regular", 26),
                                  fill=theme.sub, anchor="rs")
     return _save(img, out_path)
+
+
+# ---------------------------------------------------------------------------
+# AI で作ったイラスト・イメージ画像を使うスライド
+# ---------------------------------------------------------------------------
+
+def render_illustrated_cover(*, out_path: Path, number: int, genre: dict, hook: str, sub: str,
+                             illustration: Path, account_name: str = "") -> Path:
+    """表紙: 上に見出し、下にイラスト（テープで貼った写真風）."""
+    img, draw, theme = _canvas(genre, number)
+    w = WIDTH - MARGIN * 2
+    font, lines = _fit_lines(draw, hook, theme.heading, range(100, 63, -4), w, 3)
+    lh = int(font.size * 1.3)
+    y = yy = 160
+    for i, line in enumerate(lines):
+        lw = draw.textlength(line, font=font)
+        _marker(img, MARGIN, yy + int(font.size * 0.6), MARGIN + int(lw), yy + int(font.size * 1.12), theme.marker,
+                seed=f"ic{i}")
+        yy += lh
+    draw = ImageDraw.Draw(img)
+    for line in lines:
+        draw.text((MARGIN, y), line, font=font, fill=theme.ink)
+        y += lh
+    sf, sl = _fit_lines(draw, sub, "regular", range(40, 29, -2), w, 1)
+    draw.text((MARGIN, y + 6), sl[0], font=sf, fill=theme.sub)
+    y += int(sf.size * 1.5) + 40
+    pic = Image.open(illustration).convert("RGB")
+    _polaroid(img, theme, pic, WIDTH // 2, y, WIDTH - MARGIN * 2 - 60, HEIGHT - y - 140, -1.5)
+    _footer(img, theme, account=account_name)
+    return _save(img, out_path)
+
+
+def render_scene_slide(*, out_path: Path, number: int, genre: dict, title: str, image: Path,
+                       note: str = "※イメージ画像です（AIで作成）") -> Path:
+    """使用シーンのイメージ（AI で作った画像であることを明記する）."""
+    img, draw, theme = _canvas(genre, number)
+    y = _title(img, theme, title, 170, f"sc{number}")
+    pic = Image.open(image).convert("RGB")
+    _polaroid(img, theme, pic, WIDTH // 2, y + 30, WIDTH - MARGIN * 2 - 40, HEIGHT - y - 300, 1.2, caption=note)
+    _footer(img, theme)
+    return _save(img, out_path)

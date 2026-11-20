@@ -30,6 +30,8 @@ Instagram のキャプションに貼ったリンクはタップできません�
 3. **承認**: 下書きを直して `承認: はい` にしたものだけ、毎日20:07に1本ずつ投稿（`daily-post.yml` → `publish-draft` → `publish`）。直すと `drafts-preview.yml` が確認ページの画像を作り直す
 4. **④ 作り直し**: 公開から7日以上たって保存数が多い投稿を、角度（相手・型）を変えた下書きにする（`remix`、1投稿1回）
 
+下書きには、AI で作るイラストの英語の指示文（表紙・使用シーン）も入ります。`OPENAI_API_KEY` があれば OpenAI の画像生成 API（`OPENAI_IMAGE_MODEL`、既定 `gpt-image-2`／`OPENAI_IMAGE_QUALITY`、既定 `low`）で作り、`drafts/images/` に保存して使い回します。
+
 ジャンルごとの禁止表現（`ng_words`。サプリは薬機法・健康増進法に関わる効果効能の表現）が入っていたら、AI に1回だけ作り直させます。
 
 ## 投稿の種類

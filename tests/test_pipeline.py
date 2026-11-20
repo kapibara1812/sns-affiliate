@@ -784,3 +784,91 @@ def test_genre_ng_words_trigger_regeneration():
                                 {"name": "型", "template": "t"}, "初心者")
     assert copy.cover_hook == "プロテイン、味で選んでる？"
     assert "痩せる" in prompts[1] and "薬機法" in prompts[0]
+
+
+# ---------------------------------------------------------------------------
+# AI 画像（OpenAI）
+# ---------------------------------------------------------------------------
+
+class FakeImageGen:
+    """OpenAI の代わりに単色の画像を作る。呼ばれた回数を数える."""
+
+    enabled = True
+
+    def __init__(self):
+        self.calls = []
+
+    def generate(self, prompt, out_path, kind="cover"):
+        self.calls.append((kind, prompt))
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        size = (1024, 1024) if kind == "cover" else (1536, 1024)
+        Image.new("RGB", size, "lightblue" if kind == "cover" else "pink").save(out_path)
+        return out_path
+
+
+def test_imagegen_calls_openai_and_saves_png(tmp_path):
+    import base64
+    import io
+    from sns_affiliate.imagegen import ImageGenerator
+
+    buf = io.BytesIO()
+    Image.new("RGB", (8, 8), "red").save(buf, "PNG")
+    sent = {}
+
+    class Resp:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {"data": [{"b64_json": base64.b64encode(buf.getvalue()).decode()}]}
+
+    class Session:
+        def post(self, url, json, headers, timeout):
+            sent.update(url=url, body=json, headers=headers)
+            return Resp()
+
+    s = config.Settings()
+    s.openai_api_key, s.image_quality, s.image_model = "sk-test", "low", "gpt-image-2"
+    out = ImageGenerator(s, session=Session()).generate("A protein shaker on a bench", tmp_path / "a.png", "scene")
+    assert out and Image.open(out).size == (8, 8)
+    assert sent["url"].endswith("/v1/images/generations") and sent["headers"]["Authorization"] == "Bearer sk-test"
+    assert sent["body"]["size"] == "1536x1024" and sent["body"]["quality"] == "low"
+    assert "No text" in sent["body"]["prompt"] and "No realistic humans" in sent["body"]["prompt"]
+    s.openai_api_key = ""
+    assert ImageGenerator(s, session=Session()).generate("x", tmp_path / "b.png") is None  # キーがなければ作らない
+
+
+def test_draft_ai_images_are_cached_and_regenerated_on_edit(tmp_project):
+    from sns_affiliate import drafts as dr
+
+    _only_training_supplement()
+    gen = FakeImageGen()
+
+    class W(FakeWriter):
+        def generate_draft(self, *a, **k):
+            c = super().generate_draft(*a, **k)
+            c.cover_image_prompt = "A protein shaker and a towel"
+            c.scene_image_prompt = "A cozy home gym corner"
+            return c
+
+    s = config.Settings()
+    made = pipeline.generate_drafts(s, count=1, writer=W(), rng=random.Random(0), image_gen=gen)
+    d = made[0]
+    assert [k for k, _ in gen.calls] == ["cover", "scene"]
+    slides = sorted((tmp_project / "docs" / "drafts" / f"{d.id:04d}").glob("*.jpg"))
+    assert len(slides) >= 4
+    # 同じ指示文なら作り直さない
+    dr.render_preview(d, gen=gen)
+    assert len(gen.calls) == 2
+    # 表紙の指示文を直したら、表紙だけ作り直す
+    text = d.path.read_text(encoding="utf-8").replace("表紙: A protein shaker and a towel", "表紙: Dumbbells on a mat")
+    d.path.write_text(text, encoding="utf-8")
+    edited = dr.from_markdown(d.path.read_text(encoding="utf-8"), d.path)
+    dr.render_preview(edited, gen=gen)
+    assert gen.calls[-1] == ("cover", "Dumbbells on a mat") and len(gen.calls) == 3
+    assert len(list((tmp_project / "drafts" / "images").glob(f"{d.id:04d}-cover-*.png"))) == 1
+    # 投稿するとキャプションに AI 画像の注記が入る
+    edited.approved = True
+    dr.save(edited)
+    post = pipeline.publish_draft(s, image_gen=gen)
+    assert "AIで作成したイメージ" in post["caption"] and len(gen.calls) == 3
