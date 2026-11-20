@@ -44,6 +44,20 @@ def cmd_publish(args, settings):
     return 1 if failed else 0
 
 
+def cmd_publish_reel(args, settings):
+    results = pipeline.publish_reels(settings, wait=not args.no_wait, limit=args.limit)
+    if not results:
+        print("投稿待ちのリールはありません")
+    failed = False
+    for p in results:
+        if p.get("reel_status") == "published":
+            print(f"#{p['number']:03d} のリールを公開しました: {p.get('reel_permalink')}")
+        else:
+            failed = True
+            print(f"#{p['number']:03d} のリールの公開に失敗: {p.get('reel_error')}", file=sys.stderr)
+    return 1 if failed else 0
+
+
 def cmd_insights(args, settings):
     n = pipeline.collect_insights(settings)
     print(f"{n} 件のインサイトを更新しました → {config.INSIGHTS_CSV.relative_to(config.ROOT)}")
@@ -126,6 +140,11 @@ def main(argv=None) -> int:
     p.add_argument("--limit", type=int, default=1)
     p.add_argument("--no-wait", action="store_true", help="画像URLの公開待ちをしない")
     p.set_defaults(func=cmd_publish)
+
+    p = sub.add_parser("publish-reel", help="カルーセル投稿済みのリール動画を公開する（翌日用）")
+    p.add_argument("--limit", type=int, default=1)
+    p.add_argument("--no-wait", action="store_true", help="動画URLの公開待ちをしない")
+    p.set_defaults(func=cmd_publish_reel)
 
     sub.add_parser("insights", help="投稿のインサイトを取得して CSV 出力").set_defaults(func=cmd_insights)
     sub.add_parser("site", help="プロフィールリンク用ページを再生成").set_defaults(func=cmd_site)

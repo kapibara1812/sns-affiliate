@@ -48,6 +48,7 @@ jobs:
       ROUNDUP_SIZE: ${{ vars.ROUNDUP_SIZE }}
       A8_WEEKDAYS: ${{ vars.A8_WEEKDAYS }}
       A8_COOLDOWN_DAYS: ${{ vars.A8_COOLDOWN_DAYS }}
+      MAKE_REELS: ${{ vars.MAKE_REELS }}
     steps:
       - uses: actions/checkout@v4
 

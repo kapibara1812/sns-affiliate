@@ -308,13 +308,70 @@ def _header(draw: ImageDraw.ImageDraw, genre: dict, number: int, bg, right: str 
 
 
 def _fit_lines(draw, text: str, weight: str, sizes: range, width: int, max_lines: int):
-    for size in sizes:
-        f = _font(weight, size)
-        lines = _wrap(draw, text, f, width, max_lines + 1)
-        if len(lines) <= max_lines and "…" not in lines[-1]:
-            return f, _balance(draw, text, f, lines)
+    """できるだけ大きく、行数は少なく、最後の行が1〜2文字だけにならない組み方を探す."""
+    one = _font(weight, sizes[0])
+    if max_lines >= 2 and draw.textlength(text, font=one) > width:
+        # 2行になるなら、読点などの言葉の切れ目で改行できる最大の大きさを優先する
+        for size in sizes:
+            if size < sizes[0] * 0.6:
+                break
+            f = _font(weight, size)
+            if draw.textlength(text, font=f) <= width:
+                break  # 1行に収まるなら通常の処理へ
+            nb = _natural_break(draw, text, f, width)
+            if nb:
+                return f, nb
+    for limit in range(1, max_lines + 1):
+        for size in sizes:
+            f = _font(weight, size)
+            lines = _wrap(draw, text, f, width, limit + 1)
+            if len(lines) > limit or "…" in lines[-1]:
+                continue
+            if len(lines) == 2:
+                lines = _natural_break(draw, text, f, width) or _balance(draw, text, f, lines)
+            else:
+                lines = _even(draw, text, f, lines, width)
+            if len(lines) > 1 and len(lines[-1]) <= 2:
+                continue
+            if size >= sizes[0] * 0.7 or limit == max_lines:
+                return f, lines
     f = _font(weight, sizes[-1])
     return f, _wrap(draw, text, f, width, max_lines)
+
+
+def _natural_break(draw, text: str, font, width: int) -> list[str] | None:
+    """2行にするとき、読点や記号の直後など、言葉の切れ目で改行できるならそうする."""
+    best = None
+    for i in range(1, len(text)):
+        if text[i - 1] not in "、。！？!?・ 　）」』":
+            continue
+        a, b = text[:i].rstrip(), text[i:].lstrip()
+        wa, wb = draw.textlength(a, font=font), draw.textlength(b, font=font)
+        if not a or not b or wa > width or wb > width or len(b) <= 2:
+            continue
+        score = abs(wa - wb)
+        if best is None or score < best[0]:
+            best = (score, [a, b])
+    return best[1] if best else None
+
+
+def _even(draw, text: str, font, lines: list[str], width: int) -> list[str]:
+    """3行以上のとき、各行の長さをそろえる（最後の行だけ極端に短くならないように）."""
+    if len(lines) < 3:
+        return lines
+    n = len(lines)
+    total = draw.textlength(text, font=font)
+    target = total / n
+    out, cur = [], ""
+    for ch in text:
+        if cur and (draw.textlength(cur + ch, font=font) > width or
+                    (len(out) < n - 1 and draw.textlength(cur, font=font) >= target)):
+            out.append(cur)
+            cur = ch
+        else:
+            cur += ch
+    out.append(cur)
+    return out if len(out) == n and all(draw.textlength(l, font=font) <= width for l in out) else lines
 
 
 def _save(img: Image.Image, out_path: Path) -> Path:
@@ -472,4 +529,211 @@ def render_roundup_summary(*, out_path: Path, number: int, genre: dict, rows: li
               font=_font("bold", 40), fill=bg, anchor="mm")
     draw.text((MARGIN, HEIGHT - 36), "※価格・評価は投稿時点のものです", font=_font("regular", 24),
               fill=muted, anchor="ls")
+    return _save(img, out_path)
+
+
+# ---------------------------------------------------------------------------
+# 図解カルーセル（写真がない A8 案件など）
+# ---------------------------------------------------------------------------
+
+WHITE = (255, 255, 255)
+MUTED = (203, 213, 225)
+
+
+def _canvas(genre: dict, number: int, right: str | None = None):
+    bg = _hex(genre.get("color", "#0B1F3A"))
+    accent = _hex(genre.get("accent", "#FF5A36"))
+    img = Image.new("RGB", (WIDTH, HEIGHT), bg)
+    draw = ImageDraw.Draw(img)
+    _header(draw, genre, number, bg, right=right)
+    return img, draw, bg, accent
+
+
+def _title(draw, text: str, y: int, accent, size_range=range(68, 47, -4)) -> int:
+    font, lines = _fit_lines(draw, text, "bold", size_range, WIDTH - MARGIN * 2, 2)
+    for line in lines:
+        draw.text((MARGIN, y), line, font=font, fill=WHITE)
+        y += int(font.size * 1.3)
+    draw.line((MARGIN, y + 14, MARGIN + 120, y + 14), fill=accent, width=6)
+    return y + 60
+
+
+def _footnote(draw, text: str) -> None:
+    draw.text((MARGIN, HEIGHT - 36), text, font=_font("regular", 24), fill=MUTED, anchor="ls")
+
+
+def _swipe(draw, accent) -> None:
+    draw.text((WIDTH - MARGIN, HEIGHT - 36), "スワイプ →", font=_font("bold", 30), fill=accent, anchor="rs")
+
+
+def render_explainer_cover(*, out_path: Path, number: int, genre: dict, hook: str, sub: str,
+                           account_name: str = "") -> Path:
+    img, draw, bg, accent = _canvas(genre, number)
+    w = WIDTH - MARGIN * 2
+    draw.rounded_rectangle((MARGIN, 220, MARGIN + 330, 292), radius=36, fill=accent)
+    draw.text((MARGIN + 165, 256), "保存して見返してね", font=_font("bold", 32), fill=bg, anchor="mm")
+    font, lines = _fit_lines(draw, hook, "bold", range(112, 67, -4), w, 3)
+    lh = int(font.size * 1.28)
+    block = lh * len(lines)
+    y = max(360, (HEIGHT - block) // 2 - 60)
+    for line in lines:
+        draw.text((MARGIN, y), line, font=font, fill=WHITE)
+        y += lh
+    sub_font, sub_lines = _fit_lines(draw, sub, "regular", range(46, 33, -2), w, 2)
+    y += 30
+    for line in sub_lines:
+        draw.text((MARGIN, y), line, font=sub_font, fill=MUTED)
+        y += int(sub_font.size * 1.4)
+    if account_name:
+        draw.text((MARGIN, HEIGHT - 36), f"@{account_name}", font=_font("regular", 28), fill=MUTED, anchor="ls")
+    _swipe(draw, accent)
+    return _save(img, out_path)
+
+
+def render_list_slide(*, out_path: Path, number: int, genre: dict, title: str, items: list[str],
+                      mark: str = "check", footnote: str = "") -> Path:
+    """箇条書きスライド。mark='pain' は困りごと（！）、'check' はポイント（✓）."""
+    img, draw, bg, accent = _canvas(genre, number)
+    y = _title(draw, title, 170, accent)
+    avail = HEIGHT - 130 - y
+    n = max(1, len(items))
+    card_h = min(230, (avail - 34 * (n - 1)) // n)
+    y += max(0, (avail - (card_h * n + 34 * (n - 1))) // 2)
+    f = _font("bold", 52 if card_h >= 180 else 44)
+    for item in items:
+        panel = (MARGIN, y, WIDTH - MARGIN, y + card_h)
+        draw.rounded_rectangle(panel, radius=28, fill=_mix(bg, WHITE, 0.08))
+        cx, cy = MARGIN + 70, y + card_h // 2
+        draw.ellipse((cx - 38, cy - 38, cx + 38, cy + 38), fill=accent)
+        symbol = "!" if mark == "pain" else "✓"
+        draw.text((cx, cy), symbol, font=_font("bold", 44), fill=bg, anchor="mm")
+        lines = _wrap(draw, item, f, WIDTH - MARGIN * 2 - 170, 2)
+        lh = int(f.size * 1.3)
+        ty = cy - lh * len(lines) // 2
+        for line in lines:
+            draw.text((MARGIN + 140, ty), line, font=f, fill=WHITE)
+            ty += lh
+        y += card_h + 34
+    if footnote:
+        _footnote(draw, footnote)
+    _swipe(draw, accent)
+    return _save(img, out_path)
+
+
+def _mix(a, b, t: float):
+    return tuple(int(a[i] + (b[i] - a[i]) * t) for i in range(3))
+
+
+def render_compare_slide(*, out_path: Path, number: int, genre: dict, title: str, columns: list[str],
+                         rows: list[tuple[str, list[str]]]) -> Path:
+    """比較表。最後の列（紹介するサービスの種類）を強調する."""
+    img, draw, bg, accent = _canvas(genre, number)
+    y = _title(draw, title, 170, accent)
+    label_w = 300
+    col_w = (WIDTH - MARGIN * 2 - label_w) // len(columns)
+    head_h, row_h = 120, min(190, (HEIGHT - 170 - y - 120) // max(1, len(rows)))
+    y += max(0, (HEIGHT - 150 - y - head_h - row_h * len(rows)) // 2)
+    hi = len(columns) - 1
+    table_bottom = y + head_h + row_h * len(rows)
+    hx = MARGIN + label_w + col_w * hi
+    draw.rounded_rectangle((hx + 6, y - 10, hx + col_w - 6, table_bottom + 10), radius=24, fill=_mix(bg, accent, 0.22),
+                           outline=accent, width=4)
+    for i, col in enumerate(columns):
+        cx = MARGIN + label_w + col_w * i + col_w // 2
+        hf, lines = _fit_lines(draw, col, "bold", range(38, 25, -2), col_w - 24, 2)
+        lh = int(hf.size * 1.25)
+        ty = y + head_h // 2 - lh * len(lines) // 2
+        for line in lines:
+            draw.text((cx, ty), line, font=hf, fill=accent if i == hi else WHITE, anchor="mt")
+            ty += lh
+    y += head_h
+    vf = _font("bold", 56)
+    for label, values in rows:
+        draw.line((MARGIN, y, WIDTH - MARGIN, y), fill=_mix(bg, WHITE, 0.25), width=2)
+        cy = y + row_h // 2
+        lf, llines = _fit_lines(draw, label, "bold", range(38, 25, -2), label_w - 24, 2)
+        lh = int(lf.size * 1.25)
+        ty = cy - lh * len(llines) // 2
+        for line in llines:
+            draw.text((MARGIN, ty), line, font=lf, fill=MUTED)
+            ty += lh
+        for i, v in enumerate(values):
+            cx = MARGIN + label_w + col_w * i + col_w // 2
+            font = vf if len(v) <= 1 else _font("bold", 34)
+            t = _wrap(draw, v, font, col_w - 24, 1)
+            draw.text((cx, cy), t[0] if t else "", font=font, fill=WHITE, anchor="mm")
+        y += row_h
+    _footnote(draw, "※一般的な傾向です。条件は各サービスでご確認ください")
+    _swipe(draw, accent)
+    return _save(img, out_path)
+
+
+def render_steps_slide(*, out_path: Path, number: int, genre: dict, title: str,
+                       steps: list[tuple[str, str]]) -> Path:
+    img, draw, bg, accent = _canvas(genre, number)
+    y = _title(draw, title, 170, accent)
+    n = max(1, len(steps))
+    avail = HEIGHT - 130 - y
+    step_h = min(260, avail // n)
+    y += max(0, (avail - step_h * n) // 2)
+    tf, df = _font("bold", 58), _font("regular", 42)
+    for i, (t, d) in enumerate(steps, start=1):
+        cx, cy = MARGIN + 50, y + 50
+        draw.ellipse((cx - 50, cy - 50, cx + 50, cy + 50), fill=accent)
+        draw.text((cx, cy), str(i), font=_font("bold", 56), fill=bg, anchor="mm")
+        if i < n:
+            draw.line((cx, cy + 56, cx, y + step_h - 6), fill=_mix(bg, accent, 0.5), width=6)
+        tl = _wrap(draw, t, tf, WIDTH - MARGIN * 2 - 140, 1)
+        draw.text((MARGIN + 140, y + 12), tl[0] if tl else "", font=tf, fill=WHITE)
+        dy = y + 96
+        for line in _wrap(draw, d, df, WIDTH - MARGIN * 2 - 140, 2):
+            draw.text((MARGIN + 140, dy), line, font=df, fill=MUTED)
+            dy += 56
+        y += step_h
+    _footnote(draw, "※一般的な流れです。詳しい手順は公式サイトでご確認ください")
+    _swipe(draw, accent)
+    return _save(img, out_path)
+
+
+def render_official_image_slide(*, out_path: Path, number: int, genre: dict, title: str,
+                                image_url: str) -> Path | None:
+    """広告主の公式画像素材を、切り抜き・加工せずに縮小だけして載せる。取得できなければ None."""
+    official = _fetch_image(image_url)
+    if official is None:
+        return None
+    img, draw, bg, accent = _canvas(genre, number)
+    y = _title(draw, title, 170, accent)
+    box_w, box_h = WIDTH - MARGIN * 2 - 80, HEIGHT - y - 220
+    scale = min(box_w / official.width, box_h / official.height, 3.0)
+    size = (max(1, int(official.width * scale)), max(1, int(official.height * scale)))
+    official = official.resize(size, Image.LANCZOS)
+    panel = (MARGIN, y, WIDTH - MARGIN, y + size[1] + 80)
+    draw.rounded_rectangle(panel, radius=28, fill=WHITE)
+    img.paste(official, ((WIDTH - size[0]) // 2, y + 40))
+    draw.text((WIDTH // 2, panel[3] + 40), "画像：公式の広告素材", font=_font("regular", 28), fill=MUTED, anchor="mt")
+    _swipe(draw, accent)
+    return _save(img, out_path)
+
+
+def render_cta_slide(*, out_path: Path, number: int, genre: dict, short_name: str, price_label: str,
+                     account_name: str = "") -> Path:
+    img, draw, bg, accent = _canvas(genre, number)
+    w = WIDTH - MARGIN * 2
+    draw.text((WIDTH // 2, 300), "気になったら", font=_font("bold", 56), fill=MUTED, anchor="mm")
+    font, lines = _fit_lines(draw, short_name, "bold", range(96, 59, -4), w, 2)
+    y = 400
+    for line in lines:
+        draw.text((WIDTH // 2, y), line, font=font, fill=WHITE, anchor="mt")
+        y += int(font.size * 1.3)
+    if price_label:
+        pf, pl = _fit_lines(draw, price_label, "bold", range(72, 43, -4), w, 1)
+        draw.text((WIDTH // 2, y + 50), pl[0], font=pf, fill=accent, anchor="mt")
+        y += 50 + int(pf.size * 1.3)
+    by = max(y + 90, 820)
+    draw.rounded_rectangle((MARGIN, by, WIDTH - MARGIN, by + 110), radius=55, fill=accent)
+    draw.text((WIDTH // 2, by + 55), f"プロフィールのリンク → #{number:03d}", font=_font("bold", 46), fill=bg, anchor="mm")
+    draw.text((WIDTH // 2, by + 170), "保存しておくと、あとで見返せます", font=_font("regular", 36), fill=MUTED, anchor="mt")
+    if account_name:
+        draw.text((WIDTH - MARGIN, HEIGHT - 36), f"@{account_name}", font=_font("regular", 28), fill=MUTED, anchor="rs")
+    _footnote(draw, "※条件・料金は公式サイトでご確認ください")
     return _save(img, out_path)

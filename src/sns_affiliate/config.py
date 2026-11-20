@@ -13,6 +13,7 @@ POSTS_FILE = ROOT / "data" / "posts.json"
 INSIGHTS_CSV = ROOT / "data" / "insights.csv"
 DOCS_DIR = ROOT / "docs"
 IMAGES_DIR = DOCS_DIR / "images"
+VIDEOS_DIR = DOCS_DIR / "videos"
 
 
 def _env(name: str, default: str = "") -> str:
@@ -49,6 +50,10 @@ class Settings:
     # A8.net: 自動モードで A8 案件を投稿する曜日（1=月 … 7=日）と、同じ案件を再投稿するまでの日数
     a8_weekdays: str = field(default_factory=lambda: _env("A8_WEEKDAYS", "1,4"))
     a8_cooldown_days: int = field(default_factory=lambda: int(_env("A8_COOLDOWN_DAYS", "14")))
+
+    # リール動画: カルーセル（3枚以上）からリールを作り、翌日に別の時間で投稿する
+    make_reels: bool = field(default_factory=lambda: _env_bool("MAKE_REELS", True))
+    reel_keep_days: int = field(default_factory=lambda: int(_env("REEL_KEEP_DAYS", "7")))
 
     # Claude
     claude_model: str = field(default_factory=lambda: _env("CLAUDE_MODEL", "claude-opus-5-5"))

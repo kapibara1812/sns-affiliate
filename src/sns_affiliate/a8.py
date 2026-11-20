@@ -29,6 +29,7 @@ class A8Program:
     ng_words: list[str] = field(default_factory=list)
     notes: str = ""
     enabled: bool = True
+    images: list[str] = field(default_factory=list)  # 広告主の公式画像素材（バナー等）の URL
 
     @property
     def item_code(self) -> str:
@@ -46,6 +47,7 @@ class A8Program:
             sns_allowed=bool(d.get("sns_allowed", False)), impression=d.get("impression", ""),
             price_label=d.get("price_label", ""), ng_words=list(d.get("ng_words", [])),
             notes=d.get("notes", ""), enabled=bool(d.get("enabled", True)),
+            images=[u for u in d.get("images", []) if u],
         )
 
 

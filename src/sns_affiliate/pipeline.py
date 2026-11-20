@@ -11,9 +11,11 @@ from pathlib import Path
 import requests
 
 from . import a8, config, inbox, storage
-from .caption import CaptionGenerator, compose_a8_caption, compose_caption, compose_roundup_caption
-from .image_card import (render_card, render_photo_cover, render_photo_slide, render_roundup_cover,
-                         render_roundup_item, render_roundup_summary)
+from .caption import (CaptionGenerator, compose_a8_caption, compose_a8_explainer_caption, compose_caption,
+                      compose_roundup_caption)
+from .image_card import (render_card, render_compare_slide, render_cta_slide, render_explainer_cover,
+                         render_list_slide, render_official_image_slide, render_photo_cover, render_photo_slide,
+                         render_roundup_cover, render_roundup_item, render_roundup_summary, render_steps_slide)
 from .instagram import InstagramClient
 from .rakuten import Item, RakutenClient, item_code_from_url
 from .site import build_site
@@ -127,12 +129,30 @@ def prepare(settings: config.Settings, *, genre_id: str | None = None, use_inbox
             item = find_item(rakuten, genre, exclude, settings, rng)
             post = _build_single(settings, writer, number, genre, item, "", [], source="auto")
 
+    if settings.make_reels and len(post["images"]) >= 3:
+        _attach_reel(settings, post, genre)
+
     posts.append(post)
     storage.save_posts(posts)
     if entry:
         inbox.mark_used(entry, number)
     build_site(posts, genres, settings.site_title)
     return post
+
+
+def _attach_reel(settings: config.Settings, post: dict, genre: dict) -> None:
+    """カルーセルと同じ内容のリール動画を作り、翌日の投稿待ちにする（失敗してもカルーセルは投稿する）."""
+    from .reel import build_reel
+
+    out = config.VIDEOS_DIR / f"{post['number']:04d}.mp4"
+    try:
+        build_reel([config.ROOT / p for p in post["images"]], out, genre=genre, account_name=settings.account_name)
+    except Exception as e:  # noqa: BLE001
+        post["reel_status"] = "failed"
+        post["reel_error"] = str(e)[:300]
+        return
+    post["reel_path"] = str(out.relative_to(config.ROOT))
+    post["reel_status"] = "pending"
 
 
 def _lookup(rakuten: RakutenClient, url: str, entry_name: str) -> Item:
@@ -205,31 +225,38 @@ def _build_single(settings: config.Settings, writer: CaptionGenerator, number: i
 
 def _build_a8(settings: config.Settings, writer: CaptionGenerator, number: int, genre: dict,
               program: a8.A8Program, comment: str, photos: list[Path], source: str) -> dict:
-    copy = writer.generate_a8(program, genre, number, comment, photos)
-    card_kwargs = dict(number=number, genre=genre, headline=copy.headline, short_name=copy.short_name,
-                       points=copy.points, price=0, review_average=0, review_count=0,
-                       account_name=settings.account_name,
-                       price_label=program.price_label or "公式サイトをチェック",
-                       cta_verb="詳細は", footnote="※条件・料金は公式サイトでご確認ください")
-    images: list[Path] = []
-    if photos:
-        images.append(render_photo_cover(photo=photos[0], out_path=_out(number, 1), number=number, genre=genre,
-                                         headline=copy.headline, short_name=copy.short_name))
+    if photos:  # 自分で撮った写真がある（実際に使った）場合は写真カルーセル
+        copy = writer.generate_a8(program, genre, number, comment, photos)
+        card_kwargs = dict(number=number, genre=genre, headline=copy.headline, short_name=copy.short_name,
+                           points=copy.points, price=0, review_average=0, review_count=0,
+                           account_name=settings.account_name,
+                           price_label=program.price_label or "公式サイトをチェック",
+                           cta_verb="詳細は", footnote="※条件・料金は公式サイトでご確認ください")
+        images = [render_photo_cover(photo=photos[0], out_path=_out(number, 1), number=number, genre=genre,
+                                     headline=copy.headline, short_name=copy.short_name)]
         for i, (photo, telop) in enumerate(zip(photos[1:], copy.slide_captions), start=2):
             images.append(render_photo_slide(photo=photo, out_path=_out(number, i), caption=telop))
         images.append(render_card(out_path=_out(number, len(images) + 1), **card_kwargs))
-    else:
-        images.append(render_card(out_path=_out(number), **card_kwargs))
+        headline, short_name, points = copy.headline, copy.short_name, copy.points
+        caption = compose_a8_caption(copy, program)
+        fmt = "photo"
+    else:  # 写真がない場合は、保存されやすい図解カルーセル
+        ex = writer.generate_a8_explainer(program, genre, number)
+        images = _render_explainer(settings, number, genre, program, ex)
+        headline, short_name, points = ex.cover_hook, ex.short_name, ex.features
+        caption = compose_a8_explainer_caption(ex, program)
+        fmt = "explainer"
     rel = [str(p.relative_to(config.ROOT)) for p in images]
     return {
         "number": number,
         "kind": "single",
+        "format": fmt,
         "network": "a8",
         "genre": genre["id"],
         "source": source,
         "item_code": program.item_code,
         "item_name": program.name,
-        "short_name": copy.short_name,
+        "short_name": short_name,
         "price": None,
         "price_label": program.price_label,
         "review_average": 0,
@@ -239,12 +266,44 @@ def _build_a8(settings: config.Settings, writer: CaptionGenerator, number: int, 
         "impression": program.impression,
         "image_path": rel[0],
         "images": rel,
-        "headline": copy.headline,
-        "points": copy.points,
-        "caption": compose_a8_caption(copy, program),
+        "headline": headline,
+        "points": points,
+        "caption": caption,
         "status": "prepared",
         "created_at": storage.now_iso(),
     }
+
+
+def _render_explainer(settings: config.Settings, number: int, genre: dict, program: a8.A8Program, ex) -> list[Path]:
+    """表紙 → 悩み → 比較 → 手順 → 公式画像 → ポイント → こんな人に → まとめ（最大8枚）."""
+    seq = iter(range(1, 11))
+    out = lambda: _out(number, next(seq))  # noqa: E731
+    slides = [render_explainer_cover(out_path=out(), number=number, genre=genre, hook=ex.cover_hook,
+                                     sub=ex.cover_sub, account_name=settings.account_name)]
+    if ex.pains:
+        slides.append(render_list_slide(out_path=out(), number=number, genre=genre, title=ex.pains_title,
+                                        items=ex.pains, mark="pain"))
+    if ex.compare_rows:
+        slides.append(render_compare_slide(out_path=out(), number=number, genre=genre, title=ex.compare_title,
+                                           columns=ex.compare_columns, rows=ex.compare_rows))
+    if ex.steps:
+        slides.append(render_steps_slide(out_path=out(), number=number, genre=genre, title=ex.steps_title,
+                                         steps=ex.steps))
+    for url in program.images[:1]:
+        path = render_official_image_slide(out_path=_out(number, len(slides) + 1), number=number, genre=genre,
+                                           title=ex.short_name, image_url=url)
+        if path is not None:
+            slides.append(path)
+            next(seq)
+    slides.append(render_list_slide(out_path=out(), number=number, genre=genre, title=f"{ex.short_name}のポイント",
+                                    items=ex.features, mark="check",
+                                    footnote="※公式サイト・広告主の情報をもとにしています"))
+    if ex.fit:
+        slides.append(render_list_slide(out_path=out(), number=number, genre=genre, title="こんな人におすすめ",
+                                        items=ex.fit, mark="check"))
+    slides.append(render_cta_slide(out_path=out(), number=number, genre=genre, short_name=ex.short_name,
+                                   price_label=program.price_label, account_name=settings.account_name))
+    return slides
 
 
 def _build_roundup(settings: config.Settings, writer: CaptionGenerator, number: int, genre: dict,
@@ -341,13 +400,13 @@ def public_image_urls(settings: config.Settings, post: dict) -> list[str]:
     return [f"{settings.public_base_url}/images/{Path(p).name}" for p in paths]
 
 
-def wait_until_reachable(url: str, timeout_sec: int = 600, interval: int = 15) -> None:
+def wait_until_reachable(url: str, timeout_sec: int = 600, interval: int = 15, content_prefix: str = "image/") -> None:
     """GitHub Pages の反映を待つ（Instagram は公開URLから画像を取得するため）."""
     deadline = time.time() + timeout_sec
     while time.time() < deadline:
         try:
             r = requests.head(url, timeout=15, allow_redirects=True)
-            if r.status_code == 200 and r.headers.get("content-type", "").startswith("image/"):
+            if r.status_code == 200 and r.headers.get("content-type", "").startswith(content_prefix):
                 return
         except requests.RequestException:
             pass
@@ -381,6 +440,54 @@ def publish(settings: config.Settings, *, ig: InstagramClient | None = None,
         storage.save_posts(posts)
     build_site(posts, config.load_genres(), settings.site_title)
     return done
+
+
+def publish_reels(settings: config.Settings, *, ig: InstagramClient | None = None,
+                  wait: bool = True, limit: int = 1) -> list[dict]:
+    """カルーセルを投稿済みで、リールが投稿待ちのものを古い順に投稿する。古い動画ファイルは削除する."""
+    posts = storage.load_posts()
+    targets = [p for p in posts if p.get("status") == "published" and p.get("reel_status") == "pending"][:limit]
+    done = []
+    if targets:
+        ig = ig or InstagramClient(settings)
+    for post in targets:
+        if not settings.public_base_url:
+            raise RuntimeError("PUBLIC_BASE_URL が設定されていません")
+        video_url = f"{settings.public_base_url}/videos/{Path(post['reel_path']).name}"
+        try:
+            if wait:
+                wait_until_reachable(video_url, content_prefix="video/")
+            media = ig.publish_reel(video_url, post["caption"])
+        except Exception as e:  # noqa: BLE001
+            post["reel_status"] = "failed"
+            post["reel_error"] = str(e)[:500]
+        else:
+            post.update(reel_status="published", reel_media_id=media["id"], reel_permalink=media["permalink"],
+                        reel_published_at=storage.now_iso())
+        done.append(post)
+        storage.save_posts(posts)
+    prune_videos(posts, settings.reel_keep_days)
+    storage.save_posts(posts)
+    return done
+
+
+def prune_videos(posts: list[dict], keep_days: int) -> int:
+    """投稿済み（または失敗）から keep_days 日を過ぎた動画を消す（GitHub Pages の容量 1GB 対策）."""
+    now = datetime.now(storage.JST)
+    removed = 0
+    for p in posts:
+        path = p.get("reel_path")
+        if not path or p.get("reel_status") == "pending":
+            continue
+        stamp = p.get("reel_published_at") or p.get("created_at")
+        if now - datetime.fromisoformat(stamp) < timedelta(days=keep_days):
+            continue
+        f = config.ROOT / path
+        if f.exists():
+            f.unlink()
+            removed += 1
+        p["reel_path"] = None
+    return removed
 
 
 def collect_insights(settings: config.Settings, *, ig: InstagramClient | None = None,

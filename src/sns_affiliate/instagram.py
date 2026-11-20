@@ -31,8 +31,8 @@ class InstagramClient:
             raise InstagramError(f"{method} {path} failed: {data.get('error', resp.text)}")
         return data
 
-    def _wait_ready(self, container_id: str) -> None:
-        for _ in range(60):  # 最大5分待つ
+    def _wait_ready(self, container_id: str, tries: int = 60) -> None:
+        for _ in range(tries):  # 既定は最大5分
             status = self._request("GET", container_id, fields="status_code,status")
             code = status.get("status_code")
             if code == "FINISHED":
@@ -60,6 +60,18 @@ class InstagramClient:
                                          children=",".join(children), caption=caption)["id"]
         self._wait_ready(container_id)
 
+        media = self._request("POST", f"{self.s.ig_user_id}/media_publish", creation_id=container_id)
+        media_id = media["id"]
+        info = self._request("GET", media_id, fields="permalink,timestamp")
+        return {"id": media_id, "permalink": info.get("permalink", ""), "timestamp": info.get("timestamp")}
+
+    def publish_reel(self, video_url: str, caption: str, cover_url: str | None = None) -> dict:
+        """リール動画を投稿する（フィードにも表示）。動画の処理に数分かかることがある."""
+        params = dict(media_type="REELS", video_url=video_url, caption=caption, share_to_feed="true")
+        if cover_url:
+            params["cover_url"] = cover_url
+        container_id = self._request("POST", f"{self.s.ig_user_id}/media", **params)["id"]
+        self._wait_ready(container_id, tries=120)  # 最大10分
         media = self._request("POST", f"{self.s.ig_user_id}/media_publish", creation_id=container_id)
         media_id = media["id"]
         info = self._request("GET", media_id, fields="permalink,timestamp")

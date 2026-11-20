@@ -1,0 +1,41 @@
+name: reel-post
+
+on:
+  schedule:
+    # 毎日 12:07 JST（= 03:07 UTC）。前日の夜に投稿したカルーセルと同じ内容のリールを公開する
+    - cron: "7 3 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: sns-affiliate
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  reel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PYTHONPATH: src
+      IG_USER_ID: ${{ secrets.IG_USER_ID }}
+      IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
+      PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
+      REEL_KEEP_DAYS: ${{ vars.REEL_KEEP_DAYS }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Publish reel
+        run: python -m sns_affiliate publish-reel
+      - name: Commit result
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A data docs
+          git diff --cached --quiet || (git commit -m "reel: $(date +%F)" && git push)

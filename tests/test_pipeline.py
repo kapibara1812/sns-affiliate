@@ -1,5 +1,6 @@
 import json
 import random
+from pathlib import Path
 
 import pytest
 from PIL import Image
@@ -40,6 +41,21 @@ class FakeWriter:
                         caption=f"本文 #{number:03d}", hashtags=["#テスト"],
                         slide_captions=[f"テロップ{i}" for i in range(len(photos) - 1)])
 
+    def generate_a8_explainer(self, program, genre, number):
+        from sns_affiliate.caption import ExplainerCopy
+
+        self.calls.append(("a8x", program.id))
+        return ExplainerCopy(cover_hook="海外のネット、まだポケットWi-Fi借りてる？", cover_sub="出発前に知りたい通信の選び方",
+                             short_name=program.name[:10], pains_title="こんな悩み、ありませんか？",
+                             pains=["受け取りと返却が面倒", "充電が切れる", "荷物が増える"],
+                             compare_title="海外の通信手段を比較", compare_columns=["ポケットWi-Fi", "ローミング", "eSIM"],
+                             compare_rows=[("準備の手間", ["△", "◎", "○"]), ("荷物", ["△", "◎", "◎"]),
+                                           ("料金の目安", ["○", "△", "○"])],
+                             steps_title="使い方3ステップ", steps=[("出発前に購入", "公式サイトでプランを選ぶ"),
+                                                              ("設定する", "QRコードを読み込む"), ("到着したらオン", "回線を切り替える")],
+                             features=list(program.facts[:3]), fit=["旅行が多い人", "荷物を減らしたい人", "手続きを楽にしたい人"],
+                             caption="本文", hashtags=["#旅行"])
+
     def generate_a8(self, program, genre, number, comment="", photos=None):
         self.calls.append(("a8", program.id, comment))
         return self.generate(None, genre, number, comment, photos)
@@ -66,6 +82,8 @@ def tmp_project(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "INSIGHTS_CSV", tmp_path / "data" / "insights.csv")
     monkeypatch.setattr(config, "DOCS_DIR", tmp_path / "docs")
     monkeypatch.setattr(config, "IMAGES_DIR", tmp_path / "docs" / "images")
+    monkeypatch.setattr(config, "VIDEOS_DIR", tmp_path / "docs" / "videos")
+    monkeypatch.setenv("MAKE_REELS", "false")  # 動画生成は専用テストだけで行う（時間がかかるため）
     monkeypatch.setattr(config, "ROOT", tmp_path)
     from sns_affiliate import a8, inbox
     monkeypatch.setattr(inbox, "INBOX_DIR", tmp_path / "inbox")
@@ -472,3 +490,90 @@ def test_cli_prepare_rests_quietly(tmp_project, monkeypatch, capsys):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
     assert cli.main(["prepare"]) == 0
     assert "お休み" in capsys.readouterr().out
+
+
+def test_a8_explainer_carousel_with_official_image(tmp_project, monkeypatch):
+    from sns_affiliate import image_card
+
+    _write_programs(tmp_project)
+    data = json.loads((tmp_project / "config" / "a8_programs.json").read_text())
+    data["programs"][0]["images"] = ["https://www10.a8.net/svt/bgt?banner"]
+    (tmp_project / "config" / "a8_programs.json").write_text(json.dumps(data, ensure_ascii=False))
+    monkeypatch.setattr(image_card, "_fetch_image", lambda url: Image.new("RGB", (300, 250), "orange"))
+
+    post = pipeline.prepare(config.Settings(), mode="a8", genre_id="travel", writer=FakeWriter())
+    assert post["format"] == "explainer" and post["item_code"] == "a8:trip"
+    # 表紙・悩み・比較・手順・公式画像・ポイント・こんな人に・まとめ
+    assert len(post["images"]) == 8
+    names = [Path(p).name for p in post["images"]]
+    assert names == [f"0001-{i:02d}.jpg" for i in range(1, 9)]
+    for rel in post["images"]:
+        assert Image.open(tmp_project / rel).size == (1080, 1350)
+
+
+def test_a8_explainer_skips_missing_parts(tmp_project, monkeypatch):
+    from sns_affiliate import image_card
+    from sns_affiliate.caption import parse_explainer
+
+    ex = parse_explainer({"cover_hook": "h", "cover_sub": "s", "short_name": "n", "pains_title": "", "pains": ["a"],
+                          "compare": {"title": "", "columns": ["x"], "rows": []}, "steps_title": "", "steps": [],
+                          "features": ["f1", "f2"], "fit": [], "caption": "c", "hashtags": ["t"]})
+    assert ex.compare_rows == [] and ex.steps == [] and ex.pains_title
+    monkeypatch.setattr(image_card, "_fetch_image", lambda url: None)  # 公式画像が取れない
+    from sns_affiliate.a8 import A8Program
+    prog = A8Program(id="p", name="n", genre="travel", link="https://px.a8.net/x", facts=["f"], sns_allowed=True,
+                     images=["https://x/broken.png"])
+    slides = pipeline._render_explainer(config.Settings(), 9, config.load_genres()[0], prog, ex)
+    assert [Path(p).name for p in slides] == [f"0009-{i:02d}.jpg" for i in range(1, 5)]  # 表紙・悩み・ポイント・まとめ
+
+
+def test_reel_is_vertical_mp4(tmp_path):
+    from sns_affiliate.reel import build_reel, probe
+
+    slides = []
+    for i, c in enumerate(["red", "green", "blue"]):
+        f = tmp_path / f"{i}.jpg"
+        Image.new("RGB", (1080, 1350), c).save(f)
+        slides.append(f)
+    out = build_reel(slides, tmp_path / "r.mp4", genre=config.load_genres()[0], account_name="yoku_kapi",
+                     seconds=1.0, cover_seconds=1.0, fade=0.3)
+    info = probe(out)
+    assert out.stat().st_size > 1000
+    assert "1080x1920" in info and "h264" in info and "aac" in info
+    dur = [l for l in info.splitlines() if "Duration" in l][0]
+    assert "00:00:03" in dur  # 1+1+1+0.3 秒
+
+
+def test_reels_are_attached_and_published_next(tmp_project, monkeypatch):
+    _write_programs(tmp_project)
+    monkeypatch.setenv("MAKE_REELS", "true")
+    s = config.Settings()
+    s.public_base_url = "https://example.github.io/sns-affiliate"
+    calls = {}
+    monkeypatch.setattr("sns_affiliate.reel.build_reel",
+                        lambda slides, out, **k: (out.parent.mkdir(parents=True, exist_ok=True), out.write_bytes(b"mp4"), out)[2])
+    post = pipeline.prepare(s, mode="a8", genre_id="travel", writer=FakeWriter())
+    assert post["reel_status"] == "pending" and post["reel_path"].endswith("0001.mp4")
+
+    class IG(FakeIG):
+        def publish_reel(self, url, caption, cover_url=None):
+            calls["url"] = url
+            return {"id": "r1", "permalink": "https://instagram.com/reel/x"}
+
+    ig = IG()
+    assert pipeline.publish_reels(s, ig=ig, wait=False) == []  # カルーセルがまだ未投稿なら待つ
+    pipeline.publish(s, ig=ig, wait=False)
+    done = pipeline.publish_reels(s, ig=ig, wait=False)
+    assert done[0]["reel_status"] == "published"
+    assert calls["url"] == "https://example.github.io/sns-affiliate/videos/0001.mp4"
+
+
+def test_prune_videos_removes_old_files(tmp_project):
+    video = tmp_project / "docs" / "videos" / "0001.mp4"
+    video.parent.mkdir(parents=True)
+    video.write_bytes(b"x")
+    posts = [{"reel_path": "docs/videos/0001.mp4", "reel_status": "published",
+              "reel_published_at": "2026-01-01T00:00:00+09:00", "created_at": "2026-01-01T00:00:00+09:00"},
+             {"reel_path": "docs/videos/0002.mp4", "reel_status": "pending", "created_at": "2026-01-01T00:00:00+09:00"}]
+    assert pipeline.prune_videos(posts, 7) == 1
+    assert not video.exists() and posts[0]["reel_path"] is None and posts[1]["reel_path"]
