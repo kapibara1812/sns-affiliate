@@ -29,6 +29,11 @@ FONT_CANDIDATES = {
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
         "/usr/share/fonts/opentype/ipafont-gothic/ipagp.ttf",
     ],
+    "pop": [  # 見出し（ポップ）: 太くて丸い
+        str(_FONT_DIR / "MochiyPopOne-Regular.ttf"),
+        str(_FONT_DIR / "ZenMaruGothic-Bold.ttf"),
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
+    ],
     "bold": [  # 本文の強調: 丸ゴシック
         str(_FONT_DIR / "ZenMaruGothic-Bold.ttf"),
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
@@ -82,6 +87,11 @@ class Theme:
         # 背景: plain（無地の紙）/ watercolor（水彩のにじみ）/ gradient（やわらかいグラデーション）/
         #       linen（布のような織り目）/ dots（方眼ノート）
         self.background = g.get("background", "watercolor")
+        # カード: soft（ぼかした影のメモ用紙）/ pop（黒い枠線と、ずらしたくっきりした影）
+        self.card_style = g.get("card_style", "soft")
+        # 見出しのフォント: hand（手書き風 Klee One）/ pop（太くて丸い Mochiy Pop One）
+        self.heading = g.get("heading", "hand")
+        self.outline = _hex(g.get("outline", g.get("ink", "#2B3A55")))
         tapes = g.get("tapes") or ["#BFE3D0", "#F7C9C4", "#FBE7A1", "#CFE0F7"]
         self.tapes = [_hex(t) for t in tapes]
         self.genre_id = g.get("id", "")
@@ -291,6 +301,36 @@ def _paper(theme: Theme, seed: int, size=(WIDTH, HEIGHT)) -> Image.Image:
                 d.ellipse((cx - rad + ox, cy - rad + oy, cx + rad + ox, cy + rad + oy), fill=(*color, 70))
         layer = layer.filter(ImageFilter.GaussianBlur(55))
         img = Image.alpha_composite(img.convert("RGBA"), layer).convert("RGB")
+    elif style == "pop":
+        # 無地の明るい色に、ふちの方だけ小さな丸・星・波線を散らす（中央の文字にはかからない）
+        r = _rng("pop", seed)
+        draw = ImageDraw.Draw(img)
+        colors = theme.tapes + [(255, 255, 255)]
+        spots = []
+        for _ in range(26):
+            side = r.choice(["top", "bottom", "left", "right"])
+            if side in ("top", "bottom"):
+                x = r.randint(20, w - 20)
+                y = r.randint(10, 130) if side == "top" else r.randint(h - 130, h - 10)
+            else:
+                x = r.randint(8, 56) if side == "left" else r.randint(w - 56, w - 8)
+                y = r.randint(150, h - 150)
+            if any(abs(x - a) < 60 and abs(y - b) < 60 for a, b in spots):
+                continue
+            spots.append((x, y))
+            c = r.choice(colors)
+            kind = r.choice(["dot", "dot", "ring", "star", "squiggle"])
+            k = r.randint(8, 16)
+            if kind == "dot":
+                draw.ellipse((x - k, y - k, x + k, y + k), fill=c)
+            elif kind == "ring":
+                draw.ellipse((x - k, y - k, x + k, y + k), outline=c, width=5)
+            elif kind == "star":
+                draw.line([(x - k, y), (x + k, y)], fill=c, width=5)
+                draw.line([(x, y - k), (x, y + k)], fill=c, width=5)
+            else:
+                pts = [(x - 24 + i * 6, y + (6 if i % 2 else -6)) for i in range(9)]
+                draw.line(pts, fill=c, width=5, joint="curve")
     elif style == "gradient":
         top, bottom = theme.paper, _mix(theme.paper, theme.tapes[seed % len(theme.tapes)], 0.45)
         grad = Image.new("RGB", (1, h))
@@ -388,15 +428,22 @@ def _card(base: Image.Image, box: tuple[int, int, int, int], theme: Theme, angle
     w, h = x1 - x0, y1 - y0
     layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     d = ImageDraw.Draw(layer)
-    d.rounded_rectangle((0, 0, w - 1, h - 1), radius=radius, fill=(*(fill or theme.card), 255))
+    pop = theme.card_style == "pop"
+    d.rounded_rectangle((0, 0, w - 1, h - 1), radius=radius, fill=(*(fill or theme.card), 255),
+                        outline=(*theme.outline, 255) if pop else None, width=5 if pop else 0)
 
     def commit():
         pad = 40
         holder = Image.new("RGBA", (w + pad * 2, h + pad * 2), (0, 0, 0, 0))
         shadow = Image.new("RGBA", holder.size, (0, 0, 0, 0))
-        ImageDraw.Draw(shadow).rounded_rectangle((pad + 4, pad + 10, pad + w + 4, pad + h + 10), radius=radius,
-                                                 fill=(60, 50, 40, 38))
-        holder.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(10)))
+        if pop:  # ずらした、くっきりした影（ポップな印象）
+            ImageDraw.Draw(shadow).rounded_rectangle((pad + 12, pad + 14, pad + w + 12, pad + h + 14), radius=radius,
+                                                     fill=(*theme.outline, 255))
+            holder.alpha_composite(shadow)
+        else:
+            ImageDraw.Draw(shadow).rounded_rectangle((pad + 4, pad + 10, pad + w + 4, pad + h + 10), radius=radius,
+                                                     fill=(60, 50, 40, 38))
+            holder.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(10)))
         holder.alpha_composite(layer, (pad, pad))
         rotated = holder.rotate(angle, resample=Image.BICUBIC, expand=True)
         cx, cy = x0 + w / 2, y0 + h / 2
@@ -420,7 +467,7 @@ def _canvas(genre: dict, number: int, *, number_label: str | None = None):
 def _title(img, theme: Theme, text: str, y: int, seed, size_range=range(70, 47, -4)) -> int:
     """手書き風の見出し＋蛍光マーカー。次に描ける y を返す."""
     draw = ImageDraw.Draw(img)
-    font, lines = _fit_lines(draw, text, "hand", size_range, WIDTH - MARGIN * 2, 2)
+    font, lines = _fit_lines(draw, text, theme.heading, size_range, WIDTH - MARGIN * 2, 2)
     lh = int(font.size * 1.35)
     yy = y
     for i, line in enumerate(lines):
@@ -452,12 +499,18 @@ def _footer(img, theme: Theme, *, swipe: bool = True, note: str = "", account: s
 
 def _cta_button(img, theme: Theme, y: int, text: str, height: int = 104) -> int:
     x0, x1 = MARGIN, WIDTH - MARGIN
-    shadow = Image.new("RGBA", img.size, (0, 0, 0, 0))
-    ImageDraw.Draw(shadow).rounded_rectangle((x0 + 6, y + 8, x1 + 6, y + height + 8), radius=height // 2,
-                                             fill=(*theme.ink, 60))
-    img.paste(Image.alpha_composite(img.convert("RGBA"), shadow.filter(ImageFilter.GaussianBlur(4))).convert("RGB"))
-    draw = ImageDraw.Draw(img)
-    draw.rounded_rectangle((x0, y, x1, y + height), radius=height // 2, fill=theme.accent)
+    if theme.card_style == "pop":
+        draw = ImageDraw.Draw(img)
+        draw.rounded_rectangle((x0 + 10, y + 12, x1 + 10, y + height + 12), radius=height // 2, fill=theme.outline)
+        draw.rounded_rectangle((x0, y, x1, y + height), radius=height // 2, fill=theme.accent,
+                               outline=theme.outline, width=5)
+    else:
+        shadow = Image.new("RGBA", img.size, (0, 0, 0, 0))
+        ImageDraw.Draw(shadow).rounded_rectangle((x0 + 6, y + 8, x1 + 6, y + height + 8), radius=height // 2,
+                                                 fill=(*theme.ink, 60))
+        img.paste(Image.alpha_composite(img.convert("RGBA"), shadow.filter(ImageFilter.GaussianBlur(4))).convert("RGB"))
+        draw = ImageDraw.Draw(img)
+        draw.rounded_rectangle((x0, y, x1, y + height), radius=height // 2, fill=theme.accent)
     f, lines = _fit_lines(draw, text, "bold", range(42, 29, -2), x1 - x0 - 60, 1)
     draw.text(((x0 + x1) // 2, y + height // 2), lines[0], font=f, fill=(255, 255, 255), anchor="mm")
     return y + height
@@ -586,7 +639,7 @@ def render_photo_cover(*, photo: Path, out_path: Path, number: int, genre: dict,
     img = _cover_crop(_load_photo(photo))
     _tape(img, MARGIN + 60, 78, 130, 54, theme.tape(0), -4, "PR", _font("bold", 32), theme.ink)
     draw = ImageDraw.Draw(img)
-    font, lines = _fit_lines(draw, headline, "hand", range(78, 51, -3), WIDTH - MARGIN * 2 - 80, 2)
+    font, lines = _fit_lines(draw, headline, theme.heading, range(78, 51, -3), WIDTH - MARGIN * 2 - 80, 2)
     lh = int(font.size * 1.35)
     h = 60 + lh * len(lines) + 110
     top = HEIGHT - 70 - h
@@ -610,7 +663,7 @@ def render_photo_slide(*, photo: Path, out_path: Path, caption: str = "", genre:
     img = _cover_crop(_load_photo(photo))
     if caption:
         draw = ImageDraw.Draw(img)
-        f, lines = _fit_lines(draw, caption, "hand", range(54, 37, -2), WIDTH - MARGIN * 2 - 160, 2)
+        f, lines = _fit_lines(draw, caption, theme.heading, range(54, 37, -2), WIDTH - MARGIN * 2 - 160, 2)
         lh = int(f.size * 1.35)
         h = 50 + lh * len(lines) + 40
         top = HEIGHT - 80 - h
@@ -662,7 +715,7 @@ def render_roundup_item(*, out_path: Path, number: int, genre: dict, index: int,
     img, draw, theme = _canvas(genre, number, number_label=f"{index} / {total}")
     _hand_circle(draw, MARGIN + 55, 235, 52, 48, theme.accent, 6, f"ri{index}")
     draw.text((MARGIN + 55, 235), str(index), font=_font("hand", 64), fill=theme.accent, anchor="mm")
-    nf, nl = _fit_lines(draw, short_name, "hand", range(66, 41, -3), WIDTH - MARGIN * 2 - 150, 2)
+    nf, nl = _fit_lines(draw, short_name, theme.heading, range(66, 41, -3), WIDTH - MARGIN * 2 - 150, 2)
     lh = int(nf.size * 1.3)
     ny = 235 - lh * len(nl) // 2
     for line in nl:
@@ -735,7 +788,7 @@ def render_explainer_cover(*, out_path: Path, number: int, genre: dict, hook: st
     img, draw, theme = _canvas(genre, number)
     _tape(img, MARGIN + 150, 250, 290, 66, theme.tape(2), -3, "保存して見返してね", _font("bold", 32), theme.ink)
     w = WIDTH - MARGIN * 2
-    font, lines = _fit_lines(draw, hook, "hand", range(124, 83, -4), w, 3)
+    font, lines = _fit_lines(draw, hook, theme.heading, range(124, 83, -4), w, 3)
     lh = int(font.size * 1.32)
     sub_font, sub_lines = _fit_lines(draw, sub, "regular", range(44, 31, -2), w, 2)
     block = lh * len(lines) + 40 + int(sub_font.size * 1.5) * len(sub_lines)
@@ -808,7 +861,10 @@ def render_compare_slide(*, out_path: Path, number: int, genre: dict, title: str
     col_w = (cw - label_w - 20) // len(columns)
     hi = len(columns) - 1
     hx = label_w + col_w * hi
-    _marker(layer, hx + 8, 14, hx + col_w - 8, card_h - 14, theme.marker, alpha=110, seed="cpcol")
+    # マーカー色がカードの色に近いとき（白いマーカーなど）は、アクセント色をうすくしたもので強調する
+    near = sum(abs(a - b) for a, b in zip(theme.marker, theme.card)) < 90
+    col_hl = _mix(theme.card, theme.accent, 0.16) if near else theme.marker
+    _marker(layer, hx + 8, 14, hx + col_w - 8, card_h - 14, col_hl, alpha=170 if near else 110, seed="cpcol")
     d = ImageDraw.Draw(layer)
     for i, col in enumerate(columns):
         cx = label_w + col_w * i + col_w // 2
@@ -893,7 +949,7 @@ def render_cta_slide(*, out_path: Path, number: int, genre: dict, short_name: st
     w = WIDTH - MARGIN * 2
     draw.text((WIDTH // 2, 290), "気になったら、チェックしてみてね", font=_font("hand", 46), fill=theme.sub,
               anchor="mm")
-    font, lines = _fit_lines(draw, short_name, "hand", range(110, 63, -4), w, 2)
+    font, lines = _fit_lines(draw, short_name, theme.heading, range(110, 63, -4), w, 2)
     y = yy = 380
     for i, line in enumerate(lines):
         lw = draw.textlength(line, font=font)
