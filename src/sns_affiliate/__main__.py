@@ -15,7 +15,11 @@ from .site import build_site
 
 
 def cmd_prepare(args, settings):
-    post = pipeline.prepare(settings, genre_id=args.genre, use_inbox=not args.no_inbox, mode=args.mode)
+    try:
+        post = pipeline.prepare(settings, genre_id=args.genre, use_inbox=not args.no_inbox, mode=args.mode)
+    except pipeline.NothingToPost as e:
+        print(f"お休み: {e}")
+        return 0
     kind = {"photo": "写真カルーセル", "pick": "指定商品", "auto": "自動選定"}[post["source"]]
     if post.get("network") == "a8":
         kind = "A8.net・" + kind

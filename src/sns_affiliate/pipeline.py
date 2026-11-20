@@ -19,6 +19,10 @@ from .rakuten import Item, RakutenClient, item_code_from_url
 from .site import build_site
 
 
+class NothingToPost(RuntimeError):
+    """今日は投稿できるネタがない（エラーではなく、静かに休む）."""
+
+
 def pick_genre(genres: list[dict], number: int, genre_id: str | None = None) -> dict:
     if genre_id:
         for g in genres:
@@ -80,8 +84,14 @@ def prepare(settings: config.Settings, *, genre_id: str | None = None, use_inbox
     entries = inbox.list_entries(inbox_dir) if use_inbox else []
     entry = entries[0] if entries else None
     program = None
-    if entry is None and (mode == "a8" or (mode == "auto" and is_a8_day(settings))):
+    a8_only = mode == "auto" and not config.rakuten_ready(settings)  # 楽天が未設定の間は A8 だけで運用
+    if entry is None and (mode == "a8" or a8_only or (mode == "auto" and is_a8_day(settings))):
         program = a8.pick_program(programs, posts, settings.a8_cooldown_days, genre_id)
+        if program is None and a8_only:
+            if not a8.usable(programs):
+                raise NothingToPost("楽天のキーが未設定で、使える A8 案件（sns_allowed: true）もまだ登録されていないため、今日は投稿しません")
+            raise NothingToPost(f"A8 案件はすべて直近 {settings.a8_cooldown_days} 日以内に投稿済みのため、今日は投稿しません"
+                                "（案件を増やすか、A8_COOLDOWN_DAYS を短くしてください）")
         if program is None and mode == "a8":
             raise RuntimeError("投稿できる A8 案件がありません（sns_allowed: true の案件を config/a8_programs.json に登録してください）")
 
