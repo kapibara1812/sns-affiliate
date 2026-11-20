@@ -14,6 +14,8 @@ INSIGHTS_CSV = ROOT / "data" / "insights.csv"
 DOCS_DIR = ROOT / "docs"
 IMAGES_DIR = DOCS_DIR / "images"
 VIDEOS_DIR = DOCS_DIR / "videos"
+DRAFTS_DIR = ROOT / "drafts"
+DRAFT_PREVIEW_DIR = DOCS_DIR / "drafts"
 
 
 def _env(name: str, default: str = "") -> str:
@@ -54,6 +56,10 @@ class Settings:
     # リール動画: カルーセル（3枚以上）からリールを作り、翌日に別の時間で投稿する
     make_reels: bool = field(default_factory=lambda: _env_bool("MAKE_REELS", True))
     reel_keep_days: int = field(default_factory=lambda: int(_env("REEL_KEEP_DAYS", "7")))
+
+    # 下書きの確認ページから GitHub の編集画面へ飛ぶためのリポジトリ名（GitHub Actions では自動で入る）
+    repo_slug: str = field(default_factory=lambda: _env("GITHUB_REPOSITORY") or _env("REPO_SLUG"))
+    drafts_per_batch: int = field(default_factory=lambda: int(_env("DRAFTS_PER_BATCH", "10")))
 
     # Claude
     claude_model: str = field(default_factory=lambda: _env("CLAUDE_MODEL", "claude-opus-5-5"))

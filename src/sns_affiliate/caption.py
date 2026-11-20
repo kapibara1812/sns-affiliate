@@ -145,6 +145,33 @@ EXPLAINER_SCHEMA = {
 }
 
 
+PATTERNS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "patterns": {
+            "type": "array",
+            "description": "伸びた投稿の1行目（表紙の見出し・キャプション1行目）に共通する型を5つ。",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": _str("型の名前。例『数字で損を突く』。全角16文字以内。"),
+                    "template": _str("穴埋めできるテンプレート。例『{商品ジャンル}選びで{数字}割の人が損してる』。"),
+                    "why": _str("なぜ刺さるのか（データから読み取れる理由）。全角60文字以内。"),
+                    "examples": _strs("集めた投稿の中から、この型に当てはまる1行目を2〜3個（そのまま引用）。"),
+                },
+                "required": ["name", "template", "why", "examples"],
+                "additionalProperties": False,
+            },
+        },
+        "structures": _strs("伸びたカルーセル・リールに多い構成（例『悩み→比較→おすすめ3選→まとめ』）を3つまで。"),
+        "design_notes": _strs("デザインの共通点（配色・文字の大きさ・写真の使い方など）を5つまで。"),
+        "summary": _str("全体のまとめ。全角200文字以内。"),
+    },
+    "required": ["patterns", "structures", "design_notes", "summary"],
+    "additionalProperties": False,
+}
+
+
 @dataclass
 class ExplainerCopy:
     cover_hook: str
@@ -235,6 +262,61 @@ def build_a8_explainer_prompt(program, genre: dict, number: int, avoid: list[str
 - キャプションには「条件や最新の内容は公式サイトで確認してね」という一文を入れる。
 {f'- 次の表現は広告主のルールで禁止なので使わない: {"、".join(ng)}' if ng else ''}
 キャプションの最後は「詳しくはプロフィールのリンク → #{number:03d} からチェックしてね」の趣旨で締めてください。
+ハッシュタグには次のジャンル定番タグも含めてください: {' '.join(genre.get('hashtags', []))}
+"""
+
+
+def build_draft_prompt(subject: dict, genre: dict, pattern: dict, audience: str, avoid: list[str] | None = None,
+                       remix_of: dict | None = None) -> str:
+    """下書き用の図解カルーセル原稿のプロンプト.
+
+    subject: {"kind": "a8"|"rakuten"|"tips", "name", "facts", "price_label", "notes", "ng_words"}
+    """
+    ng = list(genre.get("ng_words", [])) + list(subject.get("ng_words", [])) + list(avoid or [])
+    caution = genre.get("caution", "")
+    if subject["kind"] == "tips":
+        about = f"""<topic>
+テーマ: {subject['name']}
+（商品の紹介はしない、お役立ち投稿。features には役立つポイントを書く。体験談は書かない）
+</topic>"""
+        tail = "キャプションの最後は「他の投稿もプロフィールからどうぞ。保存して見返してね」の趣旨で締めてください。"
+    else:
+        facts = "\n".join(f"- {f}" for f in subject.get("facts", []))
+        about = f"""<service>
+紹介するもの: {subject['name']}
+料金の表記: {subject.get('price_label') or '（指定なし。料金には触れない）'}
+公式に確認できる特徴（features はここに書かれた事実だけを使う）:
+{facts}
+{f"補足: {subject['notes']}" if subject.get('notes') else ''}
+</service>
+（投稿者本人の利用経験はありません。体験談は書かないでください）"""
+        tail = "キャプションの最後は「詳しくはプロフィールのリンク → 番号からチェックしてね」の趣旨で締めてください（番号はシステムが入れるので書かない）。"
+    remix = ""
+    if remix_of:
+        remix = f"""
+<previous_hit>
+この投稿は以前よく保存された投稿の作り直しです。同じ内容の繰り返しにならないよう、切り口（対象の人・比べる観点・語り口）を変えてください。
+前回の表紙: {remix_of.get('headline', '')}
+前回のキャプション冒頭: {remix_of.get('caption', '')[:200]}
+</previous_hit>"""
+    return f"""ジャンル: {genre['label']}
+語りかける相手: {audience}
+{f'このジャンルの注意事項: {caution}' if caution else ''}
+
+{about}
+{remix}
+<hook_pattern>
+表紙（cover_hook）とキャプションの1行目は、次の型を使ってください。
+型の名前: {pattern['name']}
+テンプレート: {pattern['template']}
+刺さる理由: {pattern.get('why', '')}
+</hook_pattern>
+
+Instagram の図解カルーセル投稿の原稿を作ってください（表紙 → 悩み → 比較 → 手順 → ポイント → こんな人に → まとめ）。
+- pains / compare / steps は一般的な内容にとどめ、具体的な金額・他社名・他社の性能は書かない。
+- 比較表で、紹介するものを不当に持ち上げない。
+{f'- 次の表現は使わない: {"、".join(dict.fromkeys(ng))}' if ng else ''}
+{tail}
 ハッシュタグには次のジャンル定番タグも含めてください: {' '.join(genre.get('hashtags', []))}
 """
 
@@ -431,6 +513,34 @@ class CaptionGenerator:
                 return copy
             avoid = found
         raise RuntimeError(f"A8案件 {program.id}: 禁止表現 {found} を含まない投稿文を作れませんでした")
+
+    def generate_draft(self, subject: dict, genre: dict, pattern: dict, audience: str,
+                       remix_of: dict | None = None) -> "ExplainerCopy":
+        """下書き1本分の原稿。ジャンル・案件の禁止表現が入っていたら1回だけ作り直す."""
+        ng = list(genre.get("ng_words", [])) + list(subject.get("ng_words", []))
+        avoid: list[str] = []
+        found: list[str] = []
+        for _ in range(2):
+            prompt = build_draft_prompt(subject, genre, pattern, audience, avoid, remix_of)
+            copy = parse_explainer(self._call([{"type": "text", "text": prompt}], EXPLAINER_SCHEMA))
+            joined = "\n".join(copy.all_text())
+            found = [w for w in ng if w and w in joined]
+            if not found:
+                return copy
+            avoid = found
+        raise RuntimeError(f"禁止表現 {found} を含まない下書きを作れませんでした（{subject['name']}）")
+
+    def analyze_patterns(self, rows_text: str, genre_label: str) -> dict:
+        """調査で集めた投稿（1行目と反応の数）から、刺さる1行目の型を5つ抜き出す."""
+        prompt = f"""以下は、Instagram の「{genre_label}」ジャンルで伸びている日本語アカウントの投稿を集めたものです。
+反応（いいね・保存・再生）が多い投稿ほど重視して、
+「この投稿の1行目（表紙の見出し・キャプションの1行目）に共通していること」を5つの型にまとめてください。
+型は、別の商品にも使い回せるテンプレートにしてください。データから言えないことは書かないでください。
+
+<posts>
+{rows_text}
+</posts>"""
+        return self._call([{"type": "text", "text": prompt}], PATTERNS_SCHEMA)
 
     def generate_roundup(self, items: list[Item], genre: dict, number: int, theme: str,
                          comment: str = "") -> RoundupCopy:

@@ -95,6 +95,7 @@ class Theme:
         tapes = g.get("tapes") or ["#BFE3D0", "#F7C9C4", "#FBE7A1", "#CFE0F7"]
         self.tapes = [_hex(t) for t in tapes]
         self.genre_id = g.get("id", "")
+        self.pr = g.get("pr", True)  # 広告を含まない投稿（お役立ち投稿）では PR 表記を出さない
         self.label = g.get("label", "")
 
     def tape(self, i: int = 0) -> tuple[int, int, int]:
@@ -455,10 +456,12 @@ def _card(base: Image.Image, box: tuple[int, int, int, int], theme: Theme, angle
 def _canvas(genre: dict, number: int, *, number_label: str | None = None):
     theme = Theme(genre)
     img = _paper(theme, number)
-    _tape(img, MARGIN + 60, 78, 130, 54, theme.tape(0), -4, "PR", _font("bold", 32), theme.ink)
+    if theme.pr:
+        _tape(img, MARGIN + 60, 78, 130, 54, theme.tape(0), -4, "PR", _font("bold", 32), theme.ink)
     draw = ImageDraw.Draw(img)
     if theme.label:
-        draw.text((MARGIN + 150, 80), theme.label, font=_font("hand", 34), fill=theme.sub, anchor="lm")
+        draw.text((MARGIN + (150 if theme.pr else 0), 80), theme.label, font=_font("hand", 34), fill=theme.sub,
+                  anchor="lm")
     draw.text((WIDTH - MARGIN, 80), number_label or f"No.{number:03d}", font=_font("hand", 40), fill=theme.ink,
               anchor="rm")
     return img, draw, theme

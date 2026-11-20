@@ -529,3 +529,192 @@ def write_insights_csv(posts: list[dict], path: Path = config.INSIGHTS_CSV) -> N
             w.writerow([p["number"], p.get("kind", "single"), p["genre"], title, price,
                         p.get("published_at", ""), p.get("permalink", ""),
                         *[ins.get(m, "") for m in metrics]])
+
+
+# ---------------------------------------------------------------------------
+# ③ 下書きをまとめて作る / ④ 伸びた投稿の作り直し / 承認された下書きを投稿する
+# ---------------------------------------------------------------------------
+
+TIPS_TOPICS = {
+    "training": ["パワーグリップとリストラップの違いと選び方", "宅トレを続けるための道具のそろえ方",
+                 "ジム初心者が最初に用意すると便利なもの", "トレーニングベルトを使うタイミング",
+                 "ホームジムを作るときの床と騒音の対策"],
+    "supplement": ["プロテインの種類（ホエイ・ソイ・カゼイン）の違い", "プロテインの選び方：味・溶けやすさ・コスパ",
+                   "成分表示の見方（たんぱく質量・カロリー）", "シェイカーの選び方と洗いやすさ",
+                   "食事でたんぱく質をとるコツと、プロテインの使いどころ"],
+}
+
+
+def _subjects(settings: config.Settings, genres: list[dict], rakuten: RakutenClient | None,
+              rng: random.Random) -> list[dict]:
+    """下書きの題材の候補（A8 案件・楽天の商品・お役立ちテーマ）."""
+    enabled = {g["id"] for g in genres}
+    subjects: list[dict] = []
+    for pr in a8.usable(a8.load_programs()):
+        if pr.genre in enabled:
+            subjects.append({"kind": "a8", "genre": pr.genre, "subject": pr.id, "name": pr.name, "facts": pr.facts,
+                             "price_label": pr.price_label, "notes": pr.notes, "ng_words": pr.ng_words,
+                             "link": pr.link, "impression": pr.impression, "images": pr.images[:1]})
+    if rakuten is not None:
+        for g in genres:
+            kw = rng.choice(g["keywords"])
+            for it in _candidates(rakuten.search(kw), set(), settings)[:2]:
+                subjects.append({"kind": "rakuten", "genre": g["id"], "subject": it.item_code,
+                                 "name": it.name[:40], "facts": [f"価格 {it.price:,}円（税込・作成時点）",
+                                                                 f"レビュー平均{it.review_average:.2f}（{it.review_count:,}件）",
+                                                                 it.caption[:300]],
+                                 "price_label": f"¥{it.price:,}", "notes": "価格は作成時点。", "ng_words": [],
+                                 "link": it.affiliate_url, "impression": "", "images": []})
+            time.sleep(1.1)
+    return subjects
+
+
+def generate_drafts(settings: config.Settings, *, count: int | None = None, writer: CaptionGenerator | None = None,
+                    rakuten: RakutenClient | None = None, rng: random.Random | None = None,
+                    render_previews: bool = True) -> list:
+    """③ ①でまとめた型を使って、下書きをまとめて作る（商品紹介:お役立ち = だいたい 7:3）."""
+    from . import drafts as dr
+    from .research import load_patterns
+
+    rng = rng or random.Random()
+    count = count or settings.drafts_per_batch
+    writer = writer or CaptionGenerator(settings.claude_model)
+    genres = config.load_genres()
+    if rakuten is None and config.rakuten_ready(settings):
+        rakuten = RakutenClient(settings)
+    subjects = _subjects(settings, genres, rakuten, rng)
+    patterns = load_patterns()
+    used: dict[str, int] = {}
+    made = []
+    next_id = dr.next_id()
+    for i in range(count):
+        genre = genres[i % len(genres)]
+        pattern = patterns[i % len(patterns)]
+        audience = rng.choice(genre.get("audiences") or ["このジャンルに興味がある人"])
+        pool = [s for s in subjects if s["genre"] == genre["id"] and used.get(s["subject"], 0) < 2]
+        if pool and (i % 10) not in (3, 6, 9):  # 10本のうち3本はお役立ち投稿
+            subj = rng.choice(pool)
+        else:
+            topic = rng.choice(TIPS_TOPICS.get(genre["id"]) or [f"{genre['label']}の選び方"])
+            subj = {"kind": "tips", "genre": genre["id"], "subject": topic, "name": topic, "facts": [],
+                    "price_label": "", "notes": "", "ng_words": [], "link": "", "impression": "", "images": []}
+        used[subj["subject"]] = used.get(subj["subject"], 0) + 1
+        copy = writer.generate_draft(subj, genre, pattern, audience)
+        d = dr.Draft(id=next_id + i, kind=subj["kind"], genre_id=genre["id"], subject=subj["subject"], name=subj["name"],
+                     copy=copy, link=subj["link"], impression=subj["impression"], price_label=subj["price_label"],
+                     images=subj["images"], pattern=pattern["name"], audience=audience)
+        dr.save(d)
+        if render_previews:
+            dr.render_preview(d, settings.account_name)
+        made.append(d)
+    if render_previews:
+        dr.build_page(settings.repo_slug)
+    return made
+
+
+def remix_hits(settings: config.Settings, *, limit: int = 2, min_age_days: int = 7,
+               writer: CaptionGenerator | None = None, render_previews: bool = True) -> list:
+    """④ 公開から1週間以上たった投稿のうち、保存数が多いものを、角度を変えた下書きにする（1投稿につき1回）."""
+    from . import drafts as dr
+    from .research import load_patterns
+
+    posts = storage.load_posts()
+    now = datetime.now(storage.JST)
+    hits = [p for p in posts
+            if p.get("status") == "published" and not p.get("remixed") and p.get("draft_id")
+            and p.get("published_at") and now - datetime.fromisoformat(p["published_at"]) >= timedelta(days=min_age_days)
+            and (p.get("insights") or {}).get("saved", 0) > 0]
+    hits.sort(key=lambda p: (p["insights"].get("saved", 0), p["insights"].get("shares", 0)), reverse=True)
+    if not hits:
+        return []
+    writer = writer or CaptionGenerator(settings.claude_model)
+    by_id = {d.id: d for d in dr.list_drafts(include_done=True)}
+    patterns = load_patterns()
+    made = []
+    for i, post in enumerate(hits[:limit]):
+        src = by_id.get(post["draft_id"])
+        if src is None:
+            continue
+        genre = dr.genre_for(src)
+        audiences = [a for a in genre.get("audiences", []) if a != src.audience] or [src.audience]
+        pattern = next((p for p in patterns if p["name"] != src.pattern), patterns[0])
+        subject = {"kind": src.kind, "name": src.name, "subject": src.subject, "facts": [], "price_label": src.price_label,
+                   "notes": "", "ng_words": []}
+        if src.kind == "a8":
+            prog = next((pr for pr in a8.load_programs() if pr.id == src.subject), None)
+            if prog:
+                subject.update(facts=prog.facts, notes=prog.notes, ng_words=prog.ng_words)
+        elif src.kind == "rakuten":
+            subject["facts"] = src.copy.features
+        copy = writer.generate_draft(subject, genre, pattern, audiences[i % len(audiences)],
+                                     remix_of={"headline": post.get("headline", ""), "caption": post.get("caption", "")})
+        d = dr.Draft(id=dr.next_id(), kind=src.kind, genre_id=src.genre_id, subject=src.subject, name=src.name,
+                     copy=copy, link=src.link, impression=src.impression, price_label=src.price_label,
+                     images=src.images, pattern=pattern["name"], audience=audiences[i % len(audiences)],
+                     remix_of=post["number"])
+        dr.save(d)
+        if render_previews:
+            dr.render_preview(d, settings.account_name)
+        post["remixed"] = True
+        made.append(d)
+    storage.save_posts(posts)
+    if render_previews and made:
+        dr.build_page(settings.repo_slug)
+    return made
+
+
+def publish_draft(settings: config.Settings) -> dict:
+    """承認済みの下書きを1本、投稿データにする（このあと publish で Instagram に公開）."""
+    from . import drafts as dr
+    from .caption import PR_LINE, _with_pr
+
+    d = dr.next_approved()
+    if d is None:
+        raise NothingToPost("承認済みの下書きがないので、今日は投稿しません（確認ページで「承認: はい」にしてください）")
+    posts = storage.load_posts()
+    number = storage.next_number(posts)
+    genre = dr.genre_for(d)
+    images = dr.render(d, config.IMAGES_DIR, number, settings.account_name, prefix=f"{number:04d}-")
+    rel = [str(p.relative_to(config.ROOT)) for p in images]
+    tags = d.copy.hashtags
+    if d.kind == "tips":
+        caption = f"{d.copy.caption}\n\n" + " ".join(tags[:30])
+    else:
+        lead = PR_LINE if d.kind == "rakuten" else "【PR】A8.netのアフィリエイト広告を利用しています"
+        price = f"💰 {d.price_label}（投稿時点）\n" if d.price_label else ""
+        caption = (f"{lead}\n\n{d.copy.caption}\n\n🛒 詳しくはプロフィールのリンク → #{number:03d}\n{price}"
+                   "※料金・条件は変わることがあります。最新の内容は販売ページ・公式サイトでご確認ください\n\n" + _with_pr(tags))
+    post = {
+        "number": number,
+        "kind": "single",
+        "format": "explainer",
+        "network": {"a8": "a8", "rakuten": "rakuten"}.get(d.kind, "none"),
+        "genre": d.genre_id,
+        "source": "draft",
+        "draft_id": d.id,
+        "item_code": f"a8:{d.subject}" if d.kind == "a8" else d.subject,
+        "item_name": d.name,
+        "short_name": d.copy.short_name,
+        "price": None,
+        "price_label": d.price_label,
+        "review_average": 0,
+        "review_count": 0,
+        "item_url": d.link,
+        "affiliate_url": d.link,
+        "impression": d.impression,
+        "image_path": rel[0],
+        "images": rel,
+        "headline": d.copy.cover_hook,
+        "points": d.copy.features,
+        "caption": caption[:2200],
+        "status": "prepared",
+        "created_at": storage.now_iso(),
+    }
+    if settings.make_reels and len(rel) >= 3:
+        _attach_reel(settings, post, genre)
+    posts.append(post)
+    storage.save_posts(posts)
+    dr.mark_published(d, number)
+    build_site(posts, config.load_genres(), settings.site_title)
+    dr.build_page(settings.repo_slug)
+    return post

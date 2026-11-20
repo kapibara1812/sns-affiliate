@@ -60,6 +60,22 @@ class FakeWriter:
         self.calls.append(("a8", program.id, comment))
         return self.generate(None, genre, number, comment, photos)
 
+    def generate_draft(self, subject, genre, pattern, audience, remix_of=None):
+        from sns_affiliate.caption import ExplainerCopy
+
+        self.calls.append(("draft", subject["kind"], subject["name"], pattern["name"], bool(remix_of)))
+        feats = list(subject.get("facts") or ["ポイントA", "ポイントB"])[:3]
+        return ExplainerCopy(cover_hook=f"{pattern['name']}：{subject['name'][:10]}", cover_sub="サブ",
+                             short_name=subject["name"][:10], pains_title="こんな悩み、ありませんか？",
+                             pains=["悩み1", "悩み2"], compare_title="比べると", compare_columns=["A", "B"],
+                             compare_rows=[("手間", ["△", "◎"])], steps_title="", steps=[], features=feats,
+                             fit=["初心者"], caption="本文です", hashtags=["#筋トレ"])
+
+    def analyze_patterns(self, rows_text, genre_label):
+        self.calls.append(("analyze", rows_text.count("\n") + 1))
+        return {"patterns": [{"name": f"型{i}", "template": f"テンプレ{i}", "why": "理由", "examples": ["例"]}
+                             for i in range(5)], "structures": ["悩み→比較"], "design_notes": ["白背景"], "summary": "まとめ"}
+
     def generate_roundup(self, items, genre, number, theme, comment=""):
         self.calls.append(("roundup", theme, comment, len(items)))
         return RoundupCopy(title=f"{theme}{len(items)}選", subtitle="サブ", caption="導入文", hashtags=["#まとめ"],
@@ -83,6 +99,21 @@ def tmp_project(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DOCS_DIR", tmp_path / "docs")
     monkeypatch.setattr(config, "IMAGES_DIR", tmp_path / "docs" / "images")
     monkeypatch.setattr(config, "VIDEOS_DIR", tmp_path / "docs" / "videos")
+    monkeypatch.setattr(config, "DRAFTS_DIR", tmp_path / "drafts")
+    monkeypatch.setattr(config, "DRAFT_PREVIEW_DIR", tmp_path / "docs" / "drafts")
+    # 本番のジャンル設定に左右されないよう、テスト用のジャンル設定を使う
+    genres = json.loads(config.GENRES_FILE.read_text(encoding="utf-8"))
+    for g in genres["genres"]:
+        g["enabled"] = g["id"] in {"gadget", "appliance", "travel", "training", "supplement"}
+    gfile = tmp_path / "config" / "genres.json"
+    gfile.parent.mkdir(parents=True, exist_ok=True)
+    gfile.write_text(json.dumps(genres, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(config, "GENRES_FILE", gfile)
+    from sns_affiliate import research
+    monkeypatch.setattr(research, "RESEARCH_DIR", tmp_path / "research")
+    monkeypatch.setattr(research, "POSTS_CSV", tmp_path / "research" / "posts.csv")
+    monkeypatch.setattr(research, "PATTERNS_JSON", tmp_path / "research" / "patterns.json")
+    monkeypatch.setattr(research, "PATTERNS_MD", tmp_path / "research" / "patterns.md")
     monkeypatch.setenv("MAKE_REELS", "false")  # 動画生成は専用テストだけで行う（時間がかかるため）
     monkeypatch.setattr(config, "ROOT", tmp_path)
     from sns_affiliate import a8, inbox
@@ -577,3 +608,179 @@ def test_prune_videos_removes_old_files(tmp_project):
              {"reel_path": "docs/videos/0002.mp4", "reel_status": "pending", "created_at": "2026-01-01T00:00:00+09:00"}]
     assert pipeline.prune_videos(posts, 7) == 1
     assert not video.exists() and posts[0]["reel_path"] is None and posts[1]["reel_path"]
+
+
+# ---------------------------------------------------------------------------
+# 下書きの流れ（① 調査 → ③ まとめて作る → 承認 → 投稿 → ④ 作り直し）
+# ---------------------------------------------------------------------------
+
+def _only_training_supplement():
+    genres = json.loads(config.GENRES_FILE.read_text(encoding="utf-8"))
+    for g in genres["genres"]:
+        g["enabled"] = g["id"] in {"training", "supplement"}
+    config.GENRES_FILE.write_text(json.dumps(genres, ensure_ascii=False), encoding="utf-8")
+
+
+def test_research_csv_to_patterns(tmp_project):
+    from sns_affiliate import research
+
+    research.RESEARCH_DIR.mkdir(parents=True)
+    research.POSTS_CSV.write_text(
+        "アカウント名,投稿URL,種類(カルーセル/リール),いいね数,保存数,再生数,1枚目(表紙)に書かれた見出しの文字,キャプションの1行目\n"
+        "a,u,カルーセル,1.2万,3000,,プロテイン選びで損してない？,知らないと損\n"
+        "b,u,リール,800,10,5万,宅トレ初心者が買うべき3つ,最初はこれだけ\n"
+        "c,u,リール,5,0,,,\n", encoding="utf-8-sig")
+    rows = research.load_posts_csv()
+    assert len(rows) == 2 and rows[0]["likes"] == 12000
+    assert research.rows_to_text(rows).startswith("1. [カルーセル] いいね12000 保存3000")
+    w = FakeWriter()
+    result = research.analyze(w, "トレーニンググッズ")
+    assert result["source_count"] == 2 and len(research.load_patterns()) == 5
+    assert "型0" in research.PATTERNS_MD.read_text(encoding="utf-8")
+
+
+def test_draft_markdown_roundtrip(tmp_project):
+    from sns_affiliate import drafts as dr
+    from sns_affiliate.caption import ExplainerCopy
+
+    copy = ExplainerCopy(cover_hook="プロテイン選びで損してない？", cover_sub="サブ", short_name="GORILLA SQUAD",
+                         pains_title="悩み", pains=["a", "b"], compare_title="比較", compare_columns=["X", "Y", "Z"],
+                         compare_rows=[("手間", ["△", "◎", "○"]), ("価格", ["○", "△", "◎"])], steps_title="手順",
+                         steps=[("買う", "公式で"), ("使う", "毎日")], features=["f1", "f2"], fit=["初心者"],
+                         caption="1行目\n2行目", hashtags=["#筋トレ", "#宅トレ"])
+    d = dr.Draft(id=7, kind="a8", genre_id="training", subject="gym", name="テストジム", copy=copy,
+                 link="https://px.a8.net/x", price_label="月額1,000円〜", pattern="損を突く", audience="初心者")
+    path = dr.save(d)
+    back = dr.from_markdown(path.read_text(encoding="utf-8"), path)
+    assert back.id == 7 and back.kind == "a8" and not back.approved
+    assert back.copy == copy and back.link == d.link and back.price_label == d.price_label
+    # 人が直して承認する
+    text = path.read_text(encoding="utf-8").replace("承認: いいえ", "承認: はい").replace("大見出し: プロテイン選びで損してない？",
+                                                                                   "大見出し: その選び方、損してるかも")
+    path.write_text(text, encoding="utf-8")
+    edited = dr.from_markdown(path.read_text(encoding="utf-8"), path)
+    assert edited.approved and edited.copy.cover_hook == "その選び方、損してるかも"
+
+
+def test_generate_drafts_mix_and_preview_page(tmp_project):
+    _only_training_supplement()
+    _write_programs(tmp_project)  # gym（training）が使える
+    s = config.Settings()
+    s.repo_slug = "owner/repo"
+    w = FakeWriter()
+    made = pipeline.generate_drafts(s, count=10, writer=w, rng=random.Random(0))
+    kinds = [d.kind for d in made]
+    assert len(made) == 10 and kinds.count("tips") >= 3 and "a8" in kinds
+    assert {d.genre_id for d in made} == {"training", "supplement"}
+    assert sum(1 for d in made if d.subject == "gym") <= 2  # 同じ案件ばかりにしない
+    assert (tmp_project / "drafts" / "0001.md").exists()
+    html = (tmp_project / "docs" / "drafts" / "index.html").read_text(encoding="utf-8")
+    assert "承認待ち 10" in html and "https://github.com/owner/repo/edit/main/drafts/0001.md" in html
+    assert list((tmp_project / "docs" / "drafts" / "0001").glob("*.jpg"))
+
+
+def test_only_approved_drafts_are_published(tmp_project):
+    from sns_affiliate import drafts as dr
+
+    _only_training_supplement()
+    _write_programs(tmp_project)
+    s = config.Settings()
+    s.public_base_url = "https://example.github.io/sns-affiliate"
+    made = pipeline.generate_drafts(s, count=3, writer=FakeWriter(), rng=random.Random(0), render_previews=False)
+    with pytest.raises(pipeline.NothingToPost):
+        pipeline.publish_draft(s)  # 承認するまで投稿されない
+    target = made[1]
+    target.approved = True
+    dr.save(target)
+    post = pipeline.publish_draft(s)
+    assert post["draft_id"] == target.id and post["number"] == 1
+    assert all(Path(p).name.startswith("0001-") for p in post["images"])
+    if target.kind == "tips":
+        assert "【PR】" not in post["caption"] and post["network"] == "none"
+    else:
+        assert post["caption"].startswith("【PR】") and "#001" in post["caption"]
+    assert not (tmp_project / "drafts" / target.filename).exists()
+    done = dr.from_markdown((tmp_project / "drafts" / "_done" / target.filename).read_text(encoding="utf-8"))
+    assert done.state == "投稿済み #001"
+    with pytest.raises(pipeline.NothingToPost):
+        pipeline.publish_draft(s)
+
+
+def test_scheduled_draft_waits_for_its_day(tmp_project):
+    from datetime import date
+    from sns_affiliate import drafts as dr
+
+    _only_training_supplement()
+    made = pipeline.generate_drafts(config.Settings(), count=2, writer=FakeWriter(), rng=random.Random(0),
+                                    render_previews=False)
+    made[0].approved, made[0].scheduled = True, "2099-01-01"
+    made[1].approved = True
+    dr.save(made[0]); dr.save(made[1])
+    assert dr.next_approved(date(2026, 11, 21)).id == made[1].id
+    made[1].approved = False
+    dr.save(made[1])
+    assert dr.next_approved(date(2026, 11, 21)) is None
+    assert dr.next_approved(date(2099, 1, 1)).id == made[0].id
+
+
+def test_tips_posts_are_not_listed_on_link_page(tmp_project):
+    from sns_affiliate import drafts as dr
+
+    _only_training_supplement()
+    made = pipeline.generate_drafts(config.Settings(), count=4, writer=FakeWriter(), rng=random.Random(0),
+                                    render_previews=False)
+    tips = next(d for d in made if d.kind == "tips")
+    tips.approved = True
+    dr.save(tips)
+    post = pipeline.publish_draft(config.Settings())
+    assert post["network"] == "none"
+    html = (tmp_project / "docs" / "index.html").read_text(encoding="utf-8")
+    assert 'class="item"' not in html
+
+
+def test_remix_hits_after_a_week(tmp_project):
+    from sns_affiliate import drafts as dr
+
+    _only_training_supplement()
+    _write_programs(tmp_project)
+    s = config.Settings()
+    made = pipeline.generate_drafts(s, count=1, writer=FakeWriter(), rng=random.Random(0), render_previews=False)
+    made[0].approved = True
+    dr.save(made[0])
+    post = pipeline.publish_draft(s)
+    posts = storage.load_posts()
+    posts[0].update(status="published", published_at="2026-01-01T20:00:00+09:00", insights={"saved": 42})
+    storage.save_posts(posts)
+    w = FakeWriter()
+    remixed = pipeline.remix_hits(s, writer=w, render_previews=False)
+    assert len(remixed) == 1 and remixed[0].remix_of == post["number"] and not remixed[0].approved
+    assert w.calls[-1][-1] is True  # 前回の投稿を渡して作り直している
+    assert pipeline.remix_hits(s, writer=FakeWriter(), render_previews=False) == []  # 同じ投稿は1回だけ
+
+
+def test_genre_ng_words_trigger_regeneration():
+    from sns_affiliate.caption import CaptionGenerator
+
+    replies = [
+        {"cover_hook": "飲むだけで痩せるプロテイン", "cover_sub": "s", "short_name": "n", "pains_title": "t", "pains": ["a"],
+         "compare": {"title": "", "columns": [], "rows": []}, "steps_title": "", "steps": [], "features": ["f"],
+         "fit": ["x"], "caption": "c", "hashtags": ["#a"]},
+        {"cover_hook": "プロテイン、味で選んでる？", "cover_sub": "s", "short_name": "n", "pains_title": "t", "pains": ["a"],
+         "compare": {"title": "", "columns": [], "rows": []}, "steps_title": "", "steps": [], "features": ["f"],
+         "fit": ["x"], "caption": "c", "hashtags": ["#a"]},
+    ]
+    prompts = []
+
+    class Gen(CaptionGenerator):
+        def __init__(self):
+            pass
+
+        def _call(self, content, schema):
+            prompts.append(content[-1]["text"])
+            return replies[len(prompts) - 1]
+
+    genre = {g["id"]: g for g in config.load_genres(include_disabled=True)}["supplement"]
+    copy = Gen().generate_draft({"kind": "tips", "name": "プロテインの選び方"}, genre,
+                                {"name": "型", "template": "t"}, "初心者")
+    assert copy.cover_hook == "プロテイン、味で選んでる？"
+    assert "痩せる" in prompts[1] and "薬機法" in prompts[0]

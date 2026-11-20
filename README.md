@@ -23,6 +23,15 @@ Instagram × 楽天アフィリエイトの**自動投稿パイプライン**で
 
 Instagram のキャプションに貼ったリンクはタップできません。そのため投稿画像とキャプションに番号を入れ、プロフィールの一覧ページ（`docs/index.html`）から購入ページへ移動してもらいます。
 
+## 投稿の流れ（下書き → 承認 → 投稿）
+
+1. **① 調査**: `research/posts.csv`（伸びている投稿30本の表紙の見出し・1行目・反応の数）を置き、`python -m sns_affiliate analyze-research` で「刺さる1行目の型」を5つ `research/patterns.md` にまとめる
+2. **③ 下書き**: 毎週日曜（`drafts-weekly.yml`）に、型と「語りかける相手」（`config/genres.json` の `audiences`）を使って下書きを10本 `drafts/` に作る（商品紹介7：お役立ち3）。確認ページは `docs/drafts/index.html`（GitHub Pages の `/drafts/`）
+3. **承認**: 下書きを直して `承認: はい` にしたものだけ、毎日20:07に1本ずつ投稿（`daily-post.yml` → `publish-draft` → `publish`）。直すと `drafts-preview.yml` が確認ページの画像を作り直す
+4. **④ 作り直し**: 公開から7日以上たって保存数が多い投稿を、角度（相手・型）を変えた下書きにする（`remix`、1投稿1回）
+
+ジャンルごとの禁止表現（`ng_words`。サプリは薬機法・健康増進法に関わる効果効能の表現）が入っていたら、AI に1回だけ作り直させます。
+
 ## 投稿の種類
 
 毎日1件、次の優先順位で投稿を作ります。
