@@ -89,6 +89,14 @@ def ig_api_url(settings: "Settings") -> str:
     return "https://graph.instagram.com/v23.0"
 
 
-def load_genres() -> list[dict]:
+def load_genres(include_disabled: bool = False) -> list[dict]:
+    """ジャンル一覧。theme の配色を各ジャンルに入れ、enabled: false のジャンルは（指定がない限り）除く."""
     with GENRES_FILE.open(encoding="utf-8") as f:
-        return json.load(f)["genres"]
+        data = json.load(f)
+    theme = {k: v for k, v in data.get("theme", {}).items() if not k.startswith("_")}
+    genres = []
+    for g in data["genres"]:
+        if not include_disabled and not g.get("enabled", True):
+            continue
+        genres.append({**theme, **g})
+    return genres

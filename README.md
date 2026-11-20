@@ -65,6 +65,13 @@ A8.net には商品検索の公開APIがないため、提携した案件を `co
 
 キーワード、ハッシュタグ、カードの色は JSON を編集するだけで変えられます。
 
+
+### ジャンルの切り替えと配色
+- `config/genres.json` の各ジャンルの `enabled` を `true` / `false` にすると、ローテーションに入れるかを切り替えられます（初期設定は ガジェット・家電・旅行・トレーニング の4つ。本・投資は停止中）
+- 画像の配色は `theme` で全ジャンル共通です。濃紺の背景（`#0B1F3A`）と赤橙のアクセント（`#FF5A36`）で、価格と購入ボタンを目立たせています
+  - 青系は「信頼・有能さ」の印象を与える（Labrecque & Milne, 2012, *Journal of the Academy of Marketing Science*）
+  - 赤い価格表示は、関与の低い買い物で「お得」に感じられやすい（Puccinelli et al., 2013, *Journal of Retailing*。主に男性で見られた効果）
+  - 文字と背景のコントラストが高いほど好ましく評価されやすい（Reber, Winkielman & Schwarz, 1998, *Psychological Science*）。白文字と背景のコントラスト比は 16.5、アクセントと背景は 5.3（WCAG AA 以上）
 ## セットアップ
 
 ### 1. 楽天
