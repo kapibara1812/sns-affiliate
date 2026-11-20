@@ -9,7 +9,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw
 
 from . import config
-from .image_card import HEIGHT as SLIDE_H, WIDTH as SLIDE_W, _font, _hex
+from .image_card import HEIGHT as SLIDE_H, WIDTH as SLIDE_W, Theme, _font, _marker, _paper, _tape
 
 REEL_W, REEL_H = 1080, 1920
 FPS = 30
@@ -25,33 +25,50 @@ def _ffmpeg() -> str:
         return "ffmpeg"
 
 
+SCALE = 0.86  # Instagram の画面（下のキャプション・右のボタン）にかからないよう、少し小さくして上寄せにする
+
+
 def _frame(slide: Path, out: Path, genre: dict, index: int, total: int, top_text: str, account_name: str) -> Path:
-    """4:5 のスライドを 9:16 のキャンバスの中央に置き、上下に案内を入れる."""
-    bg = _hex(genre.get("color", "#0B1F3A"))
-    accent = _hex(genre.get("accent", "#FF5A36"))
-    canvas = Image.new("RGB", (REEL_W, REEL_H), bg)
-    img = Image.open(slide).convert("RGB").resize((SLIDE_W, SLIDE_H))
-    top = (REEL_H - SLIDE_H) // 2
-    canvas.paste(img, (0, top))
+    """4:5 のスライドを 9:16 の紙のキャンバスに貼り、上に一言、下に進み具合を入れる."""
+    theme = Theme(genre)
+    canvas = _paper(theme, index, size=(REEL_W, REEL_H))
+    w, h = int(SLIDE_W * SCALE), int(SLIDE_H * SCALE)
+    img = Image.open(slide).convert("RGB").resize((w, h), Image.LANCZOS)
+    top = 300
+    shadow = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    ImageDraw.Draw(shadow).rounded_rectangle(((REEL_W - w) // 2 + 6, top + 12, (REEL_W + w) // 2 + 6, top + h + 12),
+                                             radius=24, fill=(60, 50, 40, 50))
+    from PIL import ImageFilter
+
+    canvas = Image.alpha_composite(canvas.convert("RGBA"), shadow.filter(ImageFilter.GaussianBlur(12))).convert("RGB")
+    mask = Image.new("L", (w, h), 0)
+    ImageDraw.Draw(mask).rounded_rectangle((0, 0, w - 1, h - 1), radius=24, fill=255)
+    canvas.paste(img, ((REEL_W - w) // 2, top), mask)
+    _tape(canvas, (REEL_W - w) // 2 + 90, top + 4, 170, 50, theme.tape(1), -10)
+    _tape(canvas, (REEL_W + w) // 2 - 90, top + 4, 170, 50, theme.tape(2), 8)
     draw = ImageDraw.Draw(canvas)
     if top_text:
-        draw.text((REEL_W // 2, top // 2), top_text, font=_font("bold", 52), fill=(255, 255, 255), anchor="mm")
-    # 進み具合のバー（リールは途中で離脱されやすいので「あと何枚か」を見せる）
-    bar_y = top + SLIDE_H + 70
-    seg = (REEL_W - 160) // total
+        f = _font("hand", 60)
+        tw = draw.textlength(top_text, font=f)
+        _marker(canvas, (REEL_W - int(tw)) // 2, 168, (REEL_W + int(tw)) // 2, 208, theme.marker, seed="reeltop")
+        draw = ImageDraw.Draw(canvas)
+        draw.text((REEL_W // 2, 170), top_text, font=f, fill=theme.ink, anchor="mm")
+    # 進み具合のドット（あと何枚か分かると、最後まで見てもらいやすい）
+    y = top + h + 60
+    gap = 44
+    x0 = REEL_W // 2 - gap * (total - 1) // 2
     for i in range(total):
-        x0 = 80 + i * seg
-        draw.rounded_rectangle((x0 + 6, bar_y, x0 + seg - 6, bar_y + 12), radius=6,
-                               fill=accent if i <= index else (70, 85, 110))
+        r = 11 if i == index else 8
+        fill = theme.accent if i <= index else theme.dot
+        draw.ellipse((x0 + gap * i - r, y - r, x0 + gap * i + r, y + r), fill=fill)
     if account_name:
-        draw.text((REEL_W // 2, bar_y + 90), f"@{account_name}", font=_font("regular", 36),
-                  fill=(203, 213, 225), anchor="mm")
+        draw.text((REEL_W // 2, y + 60), f"@{account_name}", font=_font("regular", 34), fill=theme.sub, anchor="mm")
     canvas.save(out, "PNG")
     return out
 
 
 def build_reel(slides: list[Path], out_path: Path, *, genre: dict, account_name: str = "",
-               top_text: str = "保存して見返してね", seconds: float = 3.0, cover_seconds: float = 3.5,
+               top_text: str = "保存しておくと便利だよ", seconds: float = 3.0, cover_seconds: float = 3.5,
                fade: float = 0.4, bgm: Path | None = None) -> Path:
     """スライドを順に表示し、切り替え時に短いクロスフェードを入れた MP4 を作る."""
     if len(slides) < 2:
@@ -63,8 +80,8 @@ def build_reel(slides: list[Path], out_path: Path, *, genre: dict, account_name:
                   for i, s in enumerate(slides)]
         durations = [cover_seconds] + [seconds] * (len(frames) - 1)
         cmd = [_ffmpeg(), "-y", "-loglevel", "error"]
-        for f, d in zip(frames, durations):
-            cmd += ["-loop", "1", "-t", f"{d + fade:.2f}", "-framerate", str(FPS), "-i", str(f)]
+        for f in frames:
+            cmd += ["-i", str(f)]
         total = sum(durations) + fade
         if bgm:
             cmd += ["-stream_loop", "-1", "-i", str(bgm)]
@@ -72,12 +89,18 @@ def build_reel(slides: list[Path], out_path: Path, *, genre: dict, account_name:
             cmd += ["-f", "lavfi", "-t", f"{total:.2f}", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000"]
         audio_idx = len(frames)
 
-        # xfade をつなぐ
-        parts, prev, offset = [], "[0:v]", 0.0
+        # 各スライドをゆっくりズーム（1.00 → 1.04）させてから、クロスフェードでつなぐ
+        parts = []
+        for i, d in enumerate(durations):
+            n = int((d + fade) * FPS)
+            parts.append(f"[{i}:v]scale={REEL_W * 2}:{REEL_H * 2},"
+                         f"zoompan=z='1+0.04*on/{n}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={n}:"
+                         f"s={REEL_W}x{REEL_H}:fps={FPS},setsar=1[z{i}]")
+        prev, offset = "[z0]", 0.0
         for i in range(1, len(frames)):
             offset += durations[i - 1]
             label = f"[v{i}]"
-            parts.append(f"{prev}[{i}:v]xfade=transition=fade:duration={fade}:offset={offset:.2f}{label}")
+            parts.append(f"{prev}[z{i}]xfade=transition=fade:duration={fade}:offset={offset:.2f}{label}")
             prev = label
         parts.append(f"{prev}format=yuv420p[vout]")
         audio = f"[{audio_idx}:a]atrim=0:{total:.2f},afade=t=out:st={max(0, total - 1):.2f}:d=1,volume=0.6[aout]"

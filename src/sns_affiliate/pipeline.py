@@ -199,7 +199,7 @@ def _build_single(settings: config.Settings, writer: CaptionGenerator, number: i
         images.append(render_photo_cover(photo=photos[0], out_path=_out(number, 1), number=number, genre=genre,
                                          headline=copy.headline, short_name=copy.short_name))
         for i, (photo, telop) in enumerate(zip(photos[1:], copy.slide_captions), start=2):
-            images.append(render_photo_slide(photo=photo, out_path=_out(number, i), caption=telop))
+            images.append(render_photo_slide(photo=photo, out_path=_out(number, i), caption=telop, genre=genre))
         images.append(render_card(out_path=_out(number, len(images) + 1), **card_kwargs))
     else:
         images.append(render_card(out_path=_out(number),
@@ -235,7 +235,7 @@ def _build_a8(settings: config.Settings, writer: CaptionGenerator, number: int, 
         images = [render_photo_cover(photo=photos[0], out_path=_out(number, 1), number=number, genre=genre,
                                      headline=copy.headline, short_name=copy.short_name)]
         for i, (photo, telop) in enumerate(zip(photos[1:], copy.slide_captions), start=2):
-            images.append(render_photo_slide(photo=photo, out_path=_out(number, i), caption=telop))
+            images.append(render_photo_slide(photo=photo, out_path=_out(number, i), caption=telop, genre=genre))
         images.append(render_card(out_path=_out(number, len(images) + 1), **card_kwargs))
         headline, short_name, points = copy.headline, copy.short_name, copy.points
         caption = compose_a8_caption(copy, program)
