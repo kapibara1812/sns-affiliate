@@ -24,8 +24,9 @@ class NothingToPost(RuntimeError):
 
 
 def pick_genre(genres: list[dict], number: int, genre_id: str | None = None) -> dict:
+    """genre_id の指定があればそのジャンル（止めているジャンルでも可）、なければ有効なジャンルを順番に."""
     if genre_id:
-        for g in genres:
+        for g in genres + config.load_genres(include_disabled=True):
             if g["id"] == genre_id:
                 return g
         raise ValueError(f"ジャンル {genre_id} は config/genres.json にありません")
@@ -86,9 +87,11 @@ def prepare(settings: config.Settings, *, genre_id: str | None = None, use_inbox
     program = None
     a8_only = mode == "auto" and not config.rakuten_ready(settings)  # 楽天が未設定の間は A8 だけで運用
     if entry is None and (mode == "a8" or a8_only or (mode == "auto" and is_a8_day(settings))):
-        program = a8.pick_program(programs, posts, settings.a8_cooldown_days, genre_id)
+        enabled_ids = {g["id"] for g in genres}
+        candidates = [pr for pr in programs if genre_id or pr.genre in enabled_ids]
+        program = a8.pick_program(candidates, posts, settings.a8_cooldown_days, genre_id)
         if program is None and a8_only:
-            if not a8.usable(programs):
+            if not a8.usable(candidates):
                 raise NothingToPost("楽天のキーが未設定で、使える A8 案件（sns_allowed: true）もまだ登録されていないため、今日は投稿しません")
             raise NothingToPost(f"A8 案件はすべて直近 {settings.a8_cooldown_days} 日以内に投稿済みのため、今日は投稿しません"
                                 "（案件を増やすか、A8_COOLDOWN_DAYS を短くしてください）")
