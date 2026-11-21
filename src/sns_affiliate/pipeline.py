@@ -11,9 +11,11 @@ from pathlib import Path
 import requests
 
 from . import a8, config, inbox, storage
-from .caption import CaptionGenerator, compose_a8_caption, compose_caption, compose_roundup_caption
-from .image_card import (render_card, render_photo_cover, render_photo_slide, render_roundup_cover,
-                         render_roundup_item, render_roundup_summary)
+from .caption import (CaptionGenerator, compose_a8_caption, compose_a8_explainer_caption, compose_caption,
+                      compose_roundup_caption)
+from .image_card import (render_card, render_compare_slide, render_cta_slide, render_explainer_cover,
+                         render_list_slide, render_official_image_slide, render_photo_cover, render_photo_slide,
+                         render_roundup_cover, render_roundup_item, render_roundup_summary, render_steps_slide)
 from .instagram import InstagramClient
 from .rakuten import Item, RakutenClient, item_code_from_url
 from .site import build_site
@@ -127,12 +129,30 @@ def prepare(settings: config.Settings, *, genre_id: str | None = None, use_inbox
             item = find_item(rakuten, genre, exclude, settings, rng)
             post = _build_single(settings, writer, number, genre, item, "", [], source="auto")
 
+    if settings.make_reels and len(post["images"]) >= 3:
+        _attach_reel(settings, post, genre)
+
     posts.append(post)
     storage.save_posts(posts)
     if entry:
         inbox.mark_used(entry, number)
     build_site(posts, genres, settings.site_title)
     return post
+
+
+def _attach_reel(settings: config.Settings, post: dict, genre: dict) -> None:
+    """カルーセルと同じ内容のリール動画を作り、翌日の投稿待ちにする（失敗してもカルーセルは投稿する）."""
+    from .reel import build_reel
+
+    out = config.VIDEOS_DIR / f"{post['number']:04d}.mp4"
+    try:
+        build_reel([config.ROOT / p for p in post["images"]], out, genre=genre, account_name=settings.account_name)
+    except Exception as e:  # noqa: BLE001
+        post["reel_status"] = "failed"
+        post["reel_error"] = str(e)[:300]
+        return
+    post["reel_path"] = str(out.relative_to(config.ROOT))
+    post["reel_status"] = "pending"
 
 
 def _lookup(rakuten: RakutenClient, url: str, entry_name: str) -> Item:
@@ -179,7 +199,7 @@ def _build_single(settings: config.Settings, writer: CaptionGenerator, number: i
         images.append(render_photo_cover(photo=photos[0], out_path=_out(number, 1), number=number, genre=genre,
                                          headline=copy.headline, short_name=copy.short_name))
         for i, (photo, telop) in enumerate(zip(photos[1:], copy.slide_captions), start=2):
-            images.append(render_photo_slide(photo=photo, out_path=_out(number, i), caption=telop))
+            images.append(render_photo_slide(photo=photo, out_path=_out(number, i), caption=telop, genre=genre))
         images.append(render_card(out_path=_out(number, len(images) + 1), **card_kwargs))
     else:
         images.append(render_card(out_path=_out(number),
@@ -205,31 +225,38 @@ def _build_single(settings: config.Settings, writer: CaptionGenerator, number: i
 
 def _build_a8(settings: config.Settings, writer: CaptionGenerator, number: int, genre: dict,
               program: a8.A8Program, comment: str, photos: list[Path], source: str) -> dict:
-    copy = writer.generate_a8(program, genre, number, comment, photos)
-    card_kwargs = dict(number=number, genre=genre, headline=copy.headline, short_name=copy.short_name,
-                       points=copy.points, price=0, review_average=0, review_count=0,
-                       account_name=settings.account_name,
-                       price_label=program.price_label or "公式サイトをチェック",
-                       cta_verb="詳細は", footnote="※条件・料金は公式サイトでご確認ください")
-    images: list[Path] = []
-    if photos:
-        images.append(render_photo_cover(photo=photos[0], out_path=_out(number, 1), number=number, genre=genre,
-                                         headline=copy.headline, short_name=copy.short_name))
+    if photos:  # 自分で撮った写真がある（実際に使った）場合は写真カルーセル
+        copy = writer.generate_a8(program, genre, number, comment, photos)
+        card_kwargs = dict(number=number, genre=genre, headline=copy.headline, short_name=copy.short_name,
+                           points=copy.points, price=0, review_average=0, review_count=0,
+                           account_name=settings.account_name,
+                           price_label=program.price_label or "公式サイトをチェック",
+                           cta_verb="詳細は", footnote="※条件・料金は公式サイトでご確認ください")
+        images = [render_photo_cover(photo=photos[0], out_path=_out(number, 1), number=number, genre=genre,
+                                     headline=copy.headline, short_name=copy.short_name)]
         for i, (photo, telop) in enumerate(zip(photos[1:], copy.slide_captions), start=2):
-            images.append(render_photo_slide(photo=photo, out_path=_out(number, i), caption=telop))
+            images.append(render_photo_slide(photo=photo, out_path=_out(number, i), caption=telop, genre=genre))
         images.append(render_card(out_path=_out(number, len(images) + 1), **card_kwargs))
-    else:
-        images.append(render_card(out_path=_out(number), **card_kwargs))
+        headline, short_name, points = copy.headline, copy.short_name, copy.points
+        caption = compose_a8_caption(copy, program)
+        fmt = "photo"
+    else:  # 写真がない場合は、保存されやすい図解カルーセル
+        ex = writer.generate_a8_explainer(program, genre, number)
+        images = _render_explainer(settings, number, genre, program, ex)
+        headline, short_name, points = ex.cover_hook, ex.short_name, ex.features
+        caption = compose_a8_explainer_caption(ex, program)
+        fmt = "explainer"
     rel = [str(p.relative_to(config.ROOT)) for p in images]
     return {
         "number": number,
         "kind": "single",
+        "format": fmt,
         "network": "a8",
         "genre": genre["id"],
         "source": source,
         "item_code": program.item_code,
         "item_name": program.name,
-        "short_name": copy.short_name,
+        "short_name": short_name,
         "price": None,
         "price_label": program.price_label,
         "review_average": 0,
@@ -239,12 +266,44 @@ def _build_a8(settings: config.Settings, writer: CaptionGenerator, number: int, 
         "impression": program.impression,
         "image_path": rel[0],
         "images": rel,
-        "headline": copy.headline,
-        "points": copy.points,
-        "caption": compose_a8_caption(copy, program),
+        "headline": headline,
+        "points": points,
+        "caption": caption,
         "status": "prepared",
         "created_at": storage.now_iso(),
     }
+
+
+def _render_explainer(settings: config.Settings, number: int, genre: dict, program: a8.A8Program, ex) -> list[Path]:
+    """表紙 → 悩み → 比較 → 手順 → 公式画像 → ポイント → こんな人に → まとめ（最大8枚）."""
+    seq = iter(range(1, 11))
+    out = lambda: _out(number, next(seq))  # noqa: E731
+    slides = [render_explainer_cover(out_path=out(), number=number, genre=genre, hook=ex.cover_hook,
+                                     sub=ex.cover_sub, account_name=settings.account_name)]
+    if ex.pains:
+        slides.append(render_list_slide(out_path=out(), number=number, genre=genre, title=ex.pains_title,
+                                        items=ex.pains, mark="pain"))
+    if ex.compare_rows:
+        slides.append(render_compare_slide(out_path=out(), number=number, genre=genre, title=ex.compare_title,
+                                           columns=ex.compare_columns, rows=ex.compare_rows))
+    if ex.steps:
+        slides.append(render_steps_slide(out_path=out(), number=number, genre=genre, title=ex.steps_title,
+                                         steps=ex.steps))
+    for url in program.images[:1]:
+        path = render_official_image_slide(out_path=_out(number, len(slides) + 1), number=number, genre=genre,
+                                           title=ex.short_name, image_url=url)
+        if path is not None:
+            slides.append(path)
+            next(seq)
+    slides.append(render_list_slide(out_path=out(), number=number, genre=genre, title=f"{ex.short_name}のポイント",
+                                    items=ex.features, mark="check",
+                                    footnote="※公式サイト・広告主の情報をもとにしています"))
+    if ex.fit:
+        slides.append(render_list_slide(out_path=out(), number=number, genre=genre, title="こんな人におすすめ",
+                                        items=ex.fit, mark="check"))
+    slides.append(render_cta_slide(out_path=out(), number=number, genre=genre, short_name=ex.short_name,
+                                   price_label=program.price_label, account_name=settings.account_name))
+    return slides
 
 
 def _build_roundup(settings: config.Settings, writer: CaptionGenerator, number: int, genre: dict,
@@ -341,13 +400,13 @@ def public_image_urls(settings: config.Settings, post: dict) -> list[str]:
     return [f"{settings.public_base_url}/images/{Path(p).name}" for p in paths]
 
 
-def wait_until_reachable(url: str, timeout_sec: int = 600, interval: int = 15) -> None:
+def wait_until_reachable(url: str, timeout_sec: int = 600, interval: int = 15, content_prefix: str = "image/") -> None:
     """GitHub Pages の反映を待つ（Instagram は公開URLから画像を取得するため）."""
     deadline = time.time() + timeout_sec
     while time.time() < deadline:
         try:
             r = requests.head(url, timeout=15, allow_redirects=True)
-            if r.status_code == 200 and r.headers.get("content-type", "").startswith("image/"):
+            if r.status_code == 200 and r.headers.get("content-type", "").startswith(content_prefix):
                 return
         except requests.RequestException:
             pass
@@ -381,6 +440,54 @@ def publish(settings: config.Settings, *, ig: InstagramClient | None = None,
         storage.save_posts(posts)
     build_site(posts, config.load_genres(), settings.site_title)
     return done
+
+
+def publish_reels(settings: config.Settings, *, ig: InstagramClient | None = None,
+                  wait: bool = True, limit: int = 1) -> list[dict]:
+    """カルーセルを投稿済みで、リールが投稿待ちのものを古い順に投稿する。古い動画ファイルは削除する."""
+    posts = storage.load_posts()
+    targets = [p for p in posts if p.get("status") == "published" and p.get("reel_status") == "pending"][:limit]
+    done = []
+    if targets:
+        ig = ig or InstagramClient(settings)
+    for post in targets:
+        if not settings.public_base_url:
+            raise RuntimeError("PUBLIC_BASE_URL が設定されていません")
+        video_url = f"{settings.public_base_url}/videos/{Path(post['reel_path']).name}"
+        try:
+            if wait:
+                wait_until_reachable(video_url, content_prefix="video/")
+            media = ig.publish_reel(video_url, post["caption"])
+        except Exception as e:  # noqa: BLE001
+            post["reel_status"] = "failed"
+            post["reel_error"] = str(e)[:500]
+        else:
+            post.update(reel_status="published", reel_media_id=media["id"], reel_permalink=media["permalink"],
+                        reel_published_at=storage.now_iso())
+        done.append(post)
+        storage.save_posts(posts)
+    prune_videos(posts, settings.reel_keep_days)
+    storage.save_posts(posts)
+    return done
+
+
+def prune_videos(posts: list[dict], keep_days: int) -> int:
+    """投稿済み（または失敗）から keep_days 日を過ぎた動画を消す（GitHub Pages の容量 1GB 対策）."""
+    now = datetime.now(storage.JST)
+    removed = 0
+    for p in posts:
+        path = p.get("reel_path")
+        if not path or p.get("reel_status") == "pending":
+            continue
+        stamp = p.get("reel_published_at") or p.get("created_at")
+        if now - datetime.fromisoformat(stamp) < timedelta(days=keep_days):
+            continue
+        f = config.ROOT / path
+        if f.exists():
+            f.unlink()
+            removed += 1
+        p["reel_path"] = None
+    return removed
 
 
 def collect_insights(settings: config.Settings, *, ig: InstagramClient | None = None,
@@ -422,3 +529,200 @@ def write_insights_csv(posts: list[dict], path: Path = config.INSIGHTS_CSV) -> N
             w.writerow([p["number"], p.get("kind", "single"), p["genre"], title, price,
                         p.get("published_at", ""), p.get("permalink", ""),
                         *[ins.get(m, "") for m in metrics]])
+
+
+# ---------------------------------------------------------------------------
+# ③ 下書きをまとめて作る / ④ 伸びた投稿の作り直し / 承認された下書きを投稿する
+# ---------------------------------------------------------------------------
+
+TIPS_TOPICS = {
+    "training": ["パワーグリップとリストラップの違いと選び方", "宅トレを続けるための道具のそろえ方",
+                 "ジム初心者が最初に用意すると便利なもの", "トレーニングベルトを使うタイミング",
+                 "ホームジムを作るときの床と騒音の対策"],
+    "supplement": ["プロテインの種類（ホエイ・ソイ・カゼイン）の違い", "プロテインの選び方：味・溶けやすさ・コスパ",
+                   "成分表示の見方（たんぱく質量・カロリー）", "シェイカーの選び方と洗いやすさ",
+                   "食事でたんぱく質をとるコツと、プロテインの使いどころ"],
+}
+
+
+def _subjects(settings: config.Settings, genres: list[dict], rakuten: RakutenClient | None,
+              rng: random.Random) -> list[dict]:
+    """下書きの題材の候補（A8 案件・楽天の商品・お役立ちテーマ）."""
+    enabled = {g["id"] for g in genres}
+    subjects: list[dict] = []
+    for pr in a8.usable(a8.load_programs()):
+        if pr.genre in enabled:
+            subjects.append({"kind": "a8", "genre": pr.genre, "subject": pr.id, "name": pr.name, "facts": pr.facts,
+                             "price_label": pr.price_label, "notes": pr.notes, "ng_words": pr.ng_words,
+                             "link": pr.link, "impression": pr.impression, "images": pr.images[:1]})
+    if rakuten is not None:
+        for g in genres:
+            kw = rng.choice(g["keywords"])
+            for it in _candidates(rakuten.search(kw), set(), settings)[:2]:
+                subjects.append({"kind": "rakuten", "genre": g["id"], "subject": it.item_code,
+                                 "name": it.name[:40], "facts": [f"価格 {it.price:,}円（税込・作成時点）",
+                                                                 f"レビュー平均{it.review_average:.2f}（{it.review_count:,}件）",
+                                                                 it.caption[:300]],
+                                 "price_label": f"¥{it.price:,}", "notes": "価格は作成時点。", "ng_words": [],
+                                 "link": it.affiliate_url, "impression": "", "images": []})
+            time.sleep(1.1)
+    return subjects
+
+
+def generate_drafts(settings: config.Settings, *, count: int | None = None, writer: CaptionGenerator | None = None,
+                    rakuten: RakutenClient | None = None, rng: random.Random | None = None,
+                    render_previews: bool = True, image_gen=None) -> list:
+    """③ ①でまとめた型を使って、下書きをまとめて作る（商品紹介:お役立ち = だいたい 7:3）."""
+    from . import drafts as dr
+    from .imagegen import ImageGenerator
+    from .research import load_patterns
+
+    rng = rng or random.Random()
+    image_gen = image_gen or ImageGenerator(settings)
+    count = count or settings.drafts_per_batch
+    writer = writer or CaptionGenerator(settings.claude_model)
+    genres = config.load_genres()
+    if rakuten is None and config.rakuten_ready(settings):
+        rakuten = RakutenClient(settings)
+    subjects = _subjects(settings, genres, rakuten, rng)
+    patterns = load_patterns()
+    used: dict[str, int] = {}
+    made = []
+    next_id = dr.next_id()
+    for i in range(count):
+        genre = genres[i % len(genres)]
+        pattern = patterns[i % len(patterns)]
+        audience = rng.choice(genre.get("audiences") or ["このジャンルに興味がある人"])
+        pool = [s for s in subjects if s["genre"] == genre["id"] and used.get(s["subject"], 0) < 2]
+        if pool and (i % 10) not in (3, 6, 9):  # 10本のうち3本はお役立ち投稿
+            subj = rng.choice(pool)
+        else:
+            topic = rng.choice(TIPS_TOPICS.get(genre["id"]) or [f"{genre['label']}の選び方"])
+            subj = {"kind": "tips", "genre": genre["id"], "subject": topic, "name": topic, "facts": [],
+                    "price_label": "", "notes": "", "ng_words": [], "link": "", "impression": "", "images": []}
+        used[subj["subject"]] = used.get(subj["subject"], 0) + 1
+        copy = writer.generate_draft(subj, genre, pattern, audience)
+        d = dr.Draft(id=next_id + i, kind=subj["kind"], genre_id=genre["id"], subject=subj["subject"], name=subj["name"],
+                     copy=copy, link=subj["link"], impression=subj["impression"], price_label=subj["price_label"],
+                     images=subj["images"], pattern=pattern["name"], audience=audience)
+        dr.save(d)
+        if render_previews:
+            dr.render_preview(d, settings.account_name, gen=image_gen)
+        made.append(d)
+    if render_previews:
+        dr.build_page(settings.repo_slug)
+    return made
+
+
+def remix_hits(settings: config.Settings, *, limit: int = 2, min_age_days: int = 7,
+               writer: CaptionGenerator | None = None, render_previews: bool = True, image_gen=None) -> list:
+    """④ 公開から1週間以上たった投稿のうち、保存数が多いものを、角度を変えた下書きにする（1投稿につき1回）."""
+    from . import drafts as dr
+    from .research import load_patterns
+
+    posts = storage.load_posts()
+    now = datetime.now(storage.JST)
+    hits = [p for p in posts
+            if p.get("status") == "published" and not p.get("remixed") and p.get("draft_id")
+            and p.get("published_at") and now - datetime.fromisoformat(p["published_at"]) >= timedelta(days=min_age_days)
+            and (p.get("insights") or {}).get("saved", 0) > 0]
+    hits.sort(key=lambda p: (p["insights"].get("saved", 0), p["insights"].get("shares", 0)), reverse=True)
+    if not hits:
+        return []
+    writer = writer or CaptionGenerator(settings.claude_model)
+    by_id = {d.id: d for d in dr.list_drafts(include_done=True)}
+    patterns = load_patterns()
+    made = []
+    for i, post in enumerate(hits[:limit]):
+        src = by_id.get(post["draft_id"])
+        if src is None:
+            continue
+        genre = dr.genre_for(src)
+        audiences = [a for a in genre.get("audiences", []) if a != src.audience] or [src.audience]
+        pattern = next((p for p in patterns if p["name"] != src.pattern), patterns[0])
+        subject = {"kind": src.kind, "name": src.name, "subject": src.subject, "facts": [], "price_label": src.price_label,
+                   "notes": "", "ng_words": []}
+        if src.kind == "a8":
+            prog = next((pr for pr in a8.load_programs() if pr.id == src.subject), None)
+            if prog:
+                subject.update(facts=prog.facts, notes=prog.notes, ng_words=prog.ng_words)
+        elif src.kind == "rakuten":
+            subject["facts"] = src.copy.features
+        copy = writer.generate_draft(subject, genre, pattern, audiences[i % len(audiences)],
+                                     remix_of={"headline": post.get("headline", ""), "caption": post.get("caption", "")})
+        d = dr.Draft(id=dr.next_id(), kind=src.kind, genre_id=src.genre_id, subject=src.subject, name=src.name,
+                     copy=copy, link=src.link, impression=src.impression, price_label=src.price_label,
+                     images=src.images, pattern=pattern["name"], audience=audiences[i % len(audiences)],
+                     remix_of=post["number"])
+        dr.save(d)
+        if render_previews:
+            from .imagegen import ImageGenerator
+
+            dr.render_preview(d, settings.account_name, gen=image_gen or ImageGenerator(settings))
+        post["remixed"] = True
+        made.append(d)
+    storage.save_posts(posts)
+    if render_previews and made:
+        dr.build_page(settings.repo_slug)
+    return made
+
+
+def publish_draft(settings: config.Settings, image_gen=None) -> dict:
+    """承認済みの下書きを1本、投稿データにする（このあと publish で Instagram に公開）."""
+    from . import drafts as dr
+    from .caption import PR_LINE, _with_pr
+
+    d = dr.next_approved()
+    if d is None:
+        raise NothingToPost("承認済みの下書きがないので、今日は投稿しません（確認ページで「承認: はい」にしてください）")
+    posts = storage.load_posts()
+    number = storage.next_number(posts)
+    genre = dr.genre_for(d)
+    from .imagegen import ImageGenerator
+
+    images = dr.render(d, config.IMAGES_DIR, number, settings.account_name, prefix=f"{number:04d}-",
+                       gen=image_gen or ImageGenerator(settings))
+    ai_note = "\n※一部の画像はAIで作成したイメージです" if dr.uses_ai_images(d) else ""
+    rel = [str(p.relative_to(config.ROOT)) for p in images]
+    tags = d.copy.hashtags
+    if d.kind == "tips":
+        caption = f"{d.copy.caption}{ai_note}\n\n" + " ".join(tags[:30])
+    else:
+        lead = PR_LINE if d.kind == "rakuten" else "【PR】A8.netのアフィリエイト広告を利用しています"
+        price = f"💰 {d.price_label}（投稿時点）\n" if d.price_label else ""
+        caption = (f"{lead}\n\n{d.copy.caption}\n\n🛒 詳しくはプロフィールのリンク → #{number:03d}\n{price}"
+                   "※料金・条件は変わることがあります。最新の内容は販売ページ・公式サイトでご確認ください" + ai_note + "\n\n" + _with_pr(tags))
+    post = {
+        "number": number,
+        "kind": "single",
+        "format": "explainer",
+        "network": {"a8": "a8", "rakuten": "rakuten"}.get(d.kind, "none"),
+        "genre": d.genre_id,
+        "source": "draft",
+        "draft_id": d.id,
+        "item_code": f"a8:{d.subject}" if d.kind == "a8" else d.subject,
+        "item_name": d.name,
+        "short_name": d.copy.short_name,
+        "price": None,
+        "price_label": d.price_label,
+        "review_average": 0,
+        "review_count": 0,
+        "item_url": d.link,
+        "affiliate_url": d.link,
+        "impression": d.impression,
+        "image_path": rel[0],
+        "images": rel,
+        "headline": d.copy.cover_hook,
+        "points": d.copy.features,
+        "caption": caption[:2200],
+        "status": "prepared",
+        "created_at": storage.now_iso(),
+    }
+    if settings.make_reels and len(rel) >= 3:
+        _attach_reel(settings, post, genre)
+    posts.append(post)
+    storage.save_posts(posts)
+    dr.mark_published(d, number)
+    build_site(posts, config.load_genres(), settings.site_title)
+    dr.build_page(settings.repo_slug)
+    return post

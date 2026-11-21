@@ -11,10 +11,10 @@ on:
         required: false
         default: ""
       mode:
-        description: "inbox が空のときの投稿形式（auto: 月・木はA8案件、水・土はまとめ、他は楽天の単品）"
+        description: "drafts: 承認済みの下書きを投稿（通常）／それ以外は下書きを使わない自動作成"
         type: choice
-        options: [auto, single, roundup, a8]
-        default: auto
+        options: [drafts, auto, single, roundup, a8]
+        default: drafts
       publish:
         description: "Instagram に公開する（false なら生成だけ）"
         type: boolean
@@ -34,6 +34,9 @@ jobs:
     env:
       PYTHONPATH: src
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_IMAGE_MODEL: ${{ vars.OPENAI_IMAGE_MODEL }}
+      OPENAI_IMAGE_QUALITY: ${{ vars.OPENAI_IMAGE_QUALITY }}
       RAKUTEN_APP_ID: ${{ secrets.RAKUTEN_APP_ID }}
       RAKUTEN_ACCESS_KEY: ${{ secrets.RAKUTEN_ACCESS_KEY }}
       RAKUTEN_AFFILIATE_ID: ${{ secrets.RAKUTEN_AFFILIATE_ID }}
@@ -48,6 +51,7 @@ jobs:
       ROUNDUP_SIZE: ${{ vars.ROUNDUP_SIZE }}
       A8_WEEKDAYS: ${{ vars.A8_WEEKDAYS }}
       A8_COOLDOWN_DAYS: ${{ vars.A8_COOLDOWN_DAYS }}
+      MAKE_REELS: ${{ vars.MAKE_REELS }}
     steps:
       - uses: actions/checkout@v4
 
@@ -58,17 +62,22 @@ jobs:
 
       - name: Install
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq fonts-noto-cjk
           pip install -r requirements.txt
 
-      - name: Prepare post (inbox or 楽天で商品選定 → Claude で投稿文 → 画像生成)
-        run: python -m sns_affiliate prepare --mode "${{ inputs.mode || 'auto' }}" ${{ inputs.genre && format('--genre {0}', inputs.genre) || '' }}
+      - name: Prepare post (承認済みの下書き → 画像生成)
+        run: |
+          MODE="${{ inputs.mode || 'drafts' }}"
+          if [ "$MODE" = "drafts" ]; then
+            python -m sns_affiliate publish-draft
+          else
+            python -m sns_affiliate prepare --mode "$MODE" ${{ inputs.genre && format('--genre {0}', inputs.genre) || '' }}
+          fi
 
       - name: Commit & push (GitHub Pages に画像と一覧ページを反映)
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A data docs inbox
+          git add -A data docs inbox drafts
           if git diff --cached --quiet; then echo "今日は新しい投稿はありません"; exit 0; fi
           git commit -m "post: prepare $(date +%F)"
           git push
@@ -80,5 +89,5 @@ jobs:
       - name: Commit result
         if: always()
         run: |
-          git add -A data docs inbox
+          git add -A data docs inbox drafts
           git diff --cached --quiet || (git commit -m "post: publish $(date +%F)" && git push)
