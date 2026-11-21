@@ -34,6 +34,11 @@ FONT_CANDIDATES = {
         str(_FONT_DIR / "ZenMaruGothic-Bold.ttf"),
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
     ],
+    "heavy": [  # 見出し（極太）: 力強い
+        str(_FONT_DIR / "DelaGothicOne-Regular.ttf"),
+        str(_FONT_DIR / "MochiyPopOne-Regular.ttf"),
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
+    ],
     "bold": [  # 本文の強調: 丸ゴシック
         str(_FONT_DIR / "ZenMaruGothic-Bold.ttf"),
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
@@ -81,7 +86,15 @@ class Theme:
         self.ink = _hex(g.get("ink", "#2B3A55"))        # 紺のインク（紙とのコントラスト 10.6）
         self.sub = _hex(g.get("sub", "#5B6478"))        # 補足の文字（5.5）
         self.accent = _hex(g.get("accent", "#D9472B"))  # 価格・購入導線（紙と 4.0、白文字と 4.3）
-        self.marker = _hex(g.get("marker", "#FFE27A"))  # 蛍光マーカー
+        m = g.get("marker", "#FFE27A")
+        self.marker = None if m == "none" else _hex(m)  # 蛍光マーカー（none で使わない）
+        self.on_accent = _hex(g.get("on_accent", "#FFFFFF"))  # ボタンの文字色
+        # カードやテープの上の文字色（背景が濃いテーマで、白いカードに黒文字を書くため）
+        self.card_ink = _hex(g.get("card_ink", g.get("ink", "#2B3A55")))
+        self.card_sub = _hex(g.get("card_sub", g.get("sub", "#5B6478")))
+        n = g.get("number_color")
+        self.number_color = _hex(n) if n else None  # 見出しの数字だけ色を変える（例: 黄色）
+        self.split = _hex(g["split"]) if g.get("split") else None  # 背景 split の斜めの帯の色
         self.card = _hex(g.get("card", "#FFFFFF"))
         self.dot = _hex(g.get("dot", "#E7DDC8"))
         # 背景: plain（無地の紙）/ watercolor（水彩のにじみ）/ gradient（やわらかいグラデーション）/
@@ -153,7 +166,7 @@ def _wrap(draw: ImageDraw.ImageDraw, text: str, font, max_width: int, max_lines:
                 lines.append(cur)
                 cur = tok
             last_break = -1
-        if cur and cur[-1] in BREAK_AFTER:
+        if cur and (cur[-1] in BREAK_AFTER or (cur[-1] in "のがをにはでとも" and len(cur) >= 3)):
             last_break = len(cur) - 1
         if len(lines) >= max_lines:
             break
@@ -332,6 +345,10 @@ def _paper(theme: Theme, seed: int, size=(WIDTH, HEIGHT)) -> Image.Image:
             else:
                 pts = [(x - 24 + i * 6, y + (6 if i % 2 else -6)) for i in range(9)]
                 draw.line(pts, fill=c, width=5, joint="curve")
+    elif style == "split":
+        # 2色を斜めに分けた背景（下側に帯）。上の濃い色に見出し、下はカードやボタンを置く
+        band = theme.split or theme.accent
+        ImageDraw.Draw(img).polygon([(0, int(h * 0.64)), (w, int(h * 0.50)), (w, h), (0, h)], fill=band)
     elif style == "gradient":
         top, bottom = theme.paper, _mix(theme.paper, theme.tapes[seed % len(theme.tapes)], 0.45)
         grad = Image.new("RGB", (1, h))
@@ -392,7 +409,9 @@ def _check(draw, x: float, y: float, size: float, color, width: int = 7):
 
 
 def _marker(base: Image.Image, x0: int, y0: int, x1: int, y1: int, color, alpha: int = 150, seed=0):
-    """蛍光マーカーを引いたような、少し斜めの帯."""
+    """蛍光マーカーを引いたような、少し斜めの帯（color が None なら何もしない）."""
+    if color is None:
+        return
     r = _rng("m", seed, x0, y0)
     layer = Image.new("RGBA", base.size, (0, 0, 0, 0))
     d = ImageDraw.Draw(layer)
@@ -457,7 +476,7 @@ def _canvas(genre: dict, number: int, *, number_label: str | None = None):
     theme = Theme(genre)
     img = _paper(theme, number)
     if theme.pr:
-        _tape(img, MARGIN + 60, 78, 130, 54, theme.tape(0), -4, "PR", _font("bold", 32), theme.ink)
+        _tape(img, MARGIN + 60, 78, 130, 54, theme.tape(0), -4, "PR", _font("bold", 32), theme.card_ink)
     draw = ImageDraw.Draw(img)
     if theme.label:
         draw.text((MARGIN + (150 if theme.pr else 0), 80), theme.label, font=_font("hand", 34), fill=theme.sub,
@@ -465,6 +484,44 @@ def _canvas(genre: dict, number: int, *, number_label: str | None = None):
     draw.text((WIDTH - MARGIN, 80), number_label or f"No.{number:03d}", font=_font("hand", 40), fill=theme.ink,
               anchor="rm")
     return img, draw, theme
+
+
+_DIGIT_RUN = re.compile(r"([A-Za-z]?[0-9][0-9,.%％万円gGkKＫ～〜]*)")
+
+
+def _luminance(c) -> float:
+    def ch(v):
+        v = v / 255
+        return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+    return 0.2126 * ch(c[0]) + 0.7152 * ch(c[1]) + 0.0722 * ch(c[2])
+
+
+def _contrast(a, b) -> float:
+    la, lb = sorted([_luminance(a), _luminance(b)], reverse=True)
+    return (la + 0.05) / (lb + 0.05)
+
+
+def _readable_on(bg, preferred, fallback):
+    """bg の上で読みやすいほうの色（preferred が 3.0 未満なら fallback）."""
+    return preferred if _contrast(bg, preferred) >= 3.0 else fallback
+
+
+def _draw_rich(draw, xy, text: str, font, fill, theme: "Theme", anchor: str = "la") -> None:
+    """数字の部分だけ theme.number_color で描く（設定がなければふつうに描く）. anchor は la / mt / ma."""
+    x, y = xy
+    if theme.number_color is None or not re.search(r"[0-9]", text):
+        draw.text((x, y), text, font=font, fill=fill, anchor=anchor)
+        return
+    total = draw.textlength(text, font=font)
+    if anchor in ("mt", "ma", "mm"):
+        x -= total / 2
+    va = {"mt": "lt", "ma": "la", "mm": "lm"}.get(anchor, anchor)
+    for part in _DIGIT_RUN.split(text):
+        if not part:
+            continue
+        color = theme.number_color if _DIGIT_RUN.fullmatch(part) else fill
+        draw.text((x, y), part, font=font, fill=color, anchor=va)
+        x += draw.textlength(part, font=font)
 
 
 def _title(img, theme: Theme, text: str, y: int, seed, size_range=range(70, 47, -4)) -> int:
@@ -480,7 +537,7 @@ def _title(img, theme: Theme, text: str, y: int, seed, size_range=range(70, 47, 
         yy += lh
     draw = ImageDraw.Draw(img)
     for line in lines:
-        draw.text((MARGIN, y), line, font=font, fill=theme.ink)
+        _draw_rich(draw, (MARGIN, y), line, font, theme.ink, theme)
         y += lh
     return y + 36
 
@@ -515,7 +572,7 @@ def _cta_button(img, theme: Theme, y: int, text: str, height: int = 104) -> int:
         draw = ImageDraw.Draw(img)
         draw.rounded_rectangle((x0, y, x1, y + height), radius=height // 2, fill=theme.accent)
     f, lines = _fit_lines(draw, text, "bold", range(42, 29, -2), x1 - x0 - 60, 1)
-    draw.text(((x0 + x1) // 2, y + height // 2), lines[0], font=f, fill=(255, 255, 255), anchor="mm")
+    draw.text(((x0 + x1) // 2, y + height // 2), lines[0], font=f, fill=theme.on_accent, anchor="mm")
     return y + height
 
 
@@ -545,7 +602,7 @@ def _polaroid(img: Image.Image, theme: Theme, picture: Image.Image, cx: int, top
     layer, d, commit = _card(img, box, theme, angle=angle, radius=10)
     layer.paste(pic, (pad, pad))
     if caption:
-        d.text((w // 2, pic.height + pad + bottom // 2), caption, font=_font("hand", 28), fill=theme.sub,
+        d.text((w // 2, pic.height + pad + bottom // 2), caption, font=_font("hand", 28), fill=theme.card_sub,
                anchor="mm")
     commit()
     _tape(img, box[0] + 70, top + 6, 150, 46, theme.tape(1), -12)
@@ -580,7 +637,7 @@ def _checklist_card(img, theme: Theme, box, items: list[str], angle: float, font
         lh = int(pf.size * 1.3)
         ty = cy - lh * len(lines) // 2
         for line in lines:
-            d.text((104, ty), line, font=pf, fill=theme.ink)
+            d.text((104, ty), line, font=pf, fill=theme.card_ink)
             ty += lh
         if i < len(items) - 1:
             _wobble(d, 36, row * (i + 1), w - 36, row * (i + 1), (*theme.dot, 255), 3, f"cl{i}", 1.5)
@@ -640,7 +697,7 @@ def render_photo_cover(*, photo: Path, out_path: Path, number: int, genre: dict,
     """1枚目: 自分の写真の上に、テープで留めたメモ用紙の見出し."""
     theme = Theme(genre)
     img = _cover_crop(_load_photo(photo))
-    _tape(img, MARGIN + 60, 78, 130, 54, theme.tape(0), -4, "PR", _font("bold", 32), theme.ink)
+    _tape(img, MARGIN + 60, 78, 130, 54, theme.tape(0), -4, "PR", _font("bold", 32), theme.card_ink)
     draw = ImageDraw.Draw(img)
     font, lines = _fit_lines(draw, headline, theme.heading, range(78, 51, -3), WIDTH - MARGIN * 2 - 80, 2)
     lh = int(font.size * 1.35)
@@ -650,9 +707,9 @@ def render_photo_cover(*, photo: Path, out_path: Path, number: int, genre: dict,
                              fill=theme.paper)
     y = 50
     for line in lines:
-        d.text((50, y), line, font=font, fill=theme.ink)
+        d.text((50, y), line, font=font, fill=theme.card_ink)
         y += lh
-    d.text((50, y + 4), short_name, font=_font("regular", 32), fill=theme.sub)
+    d.text((50, y + 4), short_name, font=_font("regular", 32), fill=theme.card_sub)
     d.text((WIDTH - MARGIN * 2 - 20, h - 26), f"No.{number:03d}  スワイプ →", font=_font("hand", 30),
            fill=theme.accent, anchor="rs")
     commit()
@@ -674,7 +731,7 @@ def render_photo_slide(*, photo: Path, out_path: Path, caption: str = "", genre:
                                  fill=theme.paper)
         y = 40
         for line in lines:
-            d.text((40, y), line, font=f, fill=theme.ink)
+            d.text((40, y), line, font=f, fill=theme.card_ink)
             y += lh
         commit()
         _tape(img, MARGIN + 90, top + 2, 150, 44, theme.tape(2), -8)
@@ -688,7 +745,7 @@ def render_photo_slide(*, photo: Path, out_path: Path, caption: str = "", genre:
 def render_roundup_cover(*, out_path: Path, number: int, genre: dict, title: str, subtitle: str,
                          names: list[str], account_name: str = "") -> Path:
     img, draw, theme = _canvas(genre, number)
-    _tape(img, MARGIN + 130, 210, 250, 64, theme.tape(2), -3, f"保存版 {len(names)}選", _font("bold", 34), theme.ink)
+    _tape(img, MARGIN + 130, 210, 250, 64, theme.tape(2), -3, f"保存版 {len(names)}選", _font("bold", 34), theme.card_ink)
     y = _title(img, theme, title, 280, f"rc{number}", range(96, 59, -4))
     draw = ImageDraw.Draw(img)
     sf, sl = _fit_lines(draw, subtitle, "regular", range(40, 29, -2), WIDTH - MARGIN * 2, 2)
@@ -705,7 +762,7 @@ def render_roundup_cover(*, out_path: Path, number: int, genre: dict, title: str
         _hand_circle(d, 62, cy, 26, 24, theme.accent, 4, f"rc{i}")
         d.text((62, cy), str(i + 1), font=_font("hand", 34), fill=theme.accent, anchor="mm")
         t = _wrap(d, name, lf, WIDTH - MARGIN * 2 - 150, 1)
-        d.text((112, cy), t[0] if t else "", font=lf, fill=theme.ink, anchor="lm")
+        d.text((112, cy), t[0] if t else "", font=lf, fill=theme.card_ink, anchor="lm")
     commit()
     _footer(img, theme, account=account_name)
     return _save(img, out_path)
@@ -729,7 +786,7 @@ def render_roundup_item(*, out_path: Path, number: int, genre: dict, index: int,
         bf = _font("bold", 36)
         t = _wrap(draw, best_for, bf, WIDTH - MARGIN * 2 - 80, 1)[0]
         tw = int(draw.textlength(t, font=bf))
-        _tape(img, MARGIN + tw // 2 + 40, y + 40, tw + 80, 66, theme.tape(index), -1.5, t, bf, theme.ink)
+        _tape(img, MARGIN + tw // 2 + 40, y + 40, tw + 80, 66, theme.tape(index), -1.5, t, bf, theme.card_ink)
         y += 110
     product = _fetch_image(product_image_url) if product_image_url else None
     if product is not None:
@@ -766,10 +823,10 @@ def render_roundup_summary(*, out_path: Path, number: int, genre: dict, rows: li
         _hand_circle(d, 52, cy, 24, 22, theme.accent, 4, f"rs{i}")
         d.text((52, cy), str(i + 1), font=_font("hand", 30), fill=theme.accent, anchor="mm")
         name = _wrap(d, r["short_name"], nf, cw - 330, 1)
-        d.text((96, cy - 4), name[0] if name else "", font=nf, fill=theme.ink, anchor="ls")
+        d.text((96, cy - 4), name[0] if name else "", font=nf, fill=theme.card_ink, anchor="ls")
         if r.get("best_for"):
             bf = _wrap(d, r["best_for"], sf, cw - 330, 1)
-            d.text((96, cy + 10), bf[0] if bf else "", font=sf, fill=theme.sub, anchor="lt")
+            d.text((96, cy + 10), bf[0] if bf else "", font=sf, fill=theme.card_sub, anchor="lt")
         d.text((cw - 30, cy - 4), f"¥{r['price']:,}", font=pf, fill=theme.accent, anchor="rs")
         if r.get("review_count"):
             d.text((cw - 30, cy + 10), f"★{r['review_average']:.1f}（{r['review_count']:,}）", font=sf,
@@ -789,7 +846,7 @@ def render_roundup_summary(*, out_path: Path, number: int, genre: dict, rows: li
 def render_explainer_cover(*, out_path: Path, number: int, genre: dict, hook: str, sub: str,
                            account_name: str = "") -> Path:
     img, draw, theme = _canvas(genre, number)
-    _tape(img, MARGIN + 150, 250, 290, 66, theme.tape(2), -3, "保存して見返してね", _font("bold", 32), theme.ink)
+    _tape(img, MARGIN + 150, 250, 290, 66, theme.tape(2), -3, "保存して見返してね", _font("bold", 32), theme.card_ink)
     w = WIDTH - MARGIN * 2
     font, lines = _fit_lines(draw, hook, theme.heading, range(124, 83, -4), w, 3)
     lh = int(font.size * 1.32)
@@ -804,7 +861,7 @@ def render_explainer_cover(*, out_path: Path, number: int, genre: dict, hook: st
         yy += lh
     draw = ImageDraw.Draw(img)
     for line in lines:
-        draw.text((MARGIN, y), line, font=font, fill=theme.ink)
+        _draw_rich(draw, (MARGIN, y), line, font, theme.ink, theme)
         y += lh
     y += 40
     for line in sub_lines:
@@ -841,7 +898,7 @@ def render_list_slide(*, out_path: Path, number: int, genre: dict, title: str, i
         lh = int(f.size * 1.35)
         ty = cy - lh * len(lines) // 2
         for line in lines:
-            d.text((134, ty), line, font=f, fill=theme.ink)
+            d.text((134, ty), line, font=f, fill=theme.card_ink)
             ty += lh
         commit()
         y += card_h + gap
@@ -864,8 +921,9 @@ def render_compare_slide(*, out_path: Path, number: int, genre: dict, title: str
     col_w = (cw - label_w - 20) // len(columns)
     hi = len(columns) - 1
     hx = label_w + col_w * hi
+    hi_color = _readable_on(theme.card, theme.accent, theme.card_ink)  # 強調列の文字色（カードの上で読める色）
     # マーカー色がカードの色に近いとき（白いマーカーなど）は、アクセント色をうすくしたもので強調する
-    near = sum(abs(a - b) for a, b in zip(theme.marker, theme.card)) < 90
+    near = theme.marker is None or sum(abs(a - b) for a, b in zip(theme.marker, theme.card)) < 90
     col_hl = _mix(theme.card, theme.accent, 0.16) if near else theme.marker
     _marker(layer, hx + 8, 14, hx + col_w - 8, card_h - 14, col_hl, alpha=170 if near else 110, seed="cpcol")
     d = ImageDraw.Draw(layer)
@@ -875,9 +933,9 @@ def render_compare_slide(*, out_path: Path, number: int, genre: dict, title: str
         lh = int(hf.size * 1.25)
         ty = 15 + head_h // 2 - lh * len(lines) // 2
         for line in lines:
-            d.text((cx, ty), line, font=hf, fill=theme.accent if i == hi else theme.ink, anchor="mt")
+            d.text((cx, ty), line, font=hf, fill=hi_color if i == hi else theme.card_ink, anchor="mt")
             ty += lh
-    _hand_circle(d, hx + col_w // 2, 15 + head_h // 2, col_w // 2 - 6, 42, theme.accent, 4, "cphead")
+    _hand_circle(d, hx + col_w // 2, 15 + head_h // 2, col_w // 2 - 6, 42, hi_color, 4, "cphead")
     yy = 15 + head_h
     vf, vs = _font("bold", 52), _font("bold", 32)
     for r_i, (label, values) in enumerate(rows):
@@ -887,13 +945,13 @@ def render_compare_slide(*, out_path: Path, number: int, genre: dict, title: str
         lh = int(lf.size * 1.25)
         ty = cy - lh * len(ll) // 2
         for line in ll:
-            d.text((30, ty), line, font=lf, fill=theme.sub)
+            d.text((30, ty), line, font=lf, fill=theme.card_sub)
             ty += lh
         for i, v in enumerate(values):
             cx = label_w + col_w * i + col_w // 2
             font = vf if len(v) <= 1 else vs
             t = _wrap(d, v, font, col_w - 24, 1)
-            d.text((cx, cy), t[0] if t else "", font=font, fill=theme.accent if i == hi else theme.ink, anchor="mm")
+            d.text((cx, cy), t[0] if t else "", font=font, fill=hi_color if i == hi else theme.card_ink, anchor="mm")
         yy += row_h
     commit()
     _footer(img, theme, note="※一般的な傾向です。条件は各サービスでご確認ください")
@@ -961,7 +1019,7 @@ def render_cta_slide(*, out_path: Path, number: int, genre: dict, short_name: st
         yy += int(font.size * 1.35)
     draw = ImageDraw.Draw(img)
     for line in lines:
-        draw.text((WIDTH // 2, y), line, font=font, fill=theme.ink, anchor="mt")
+        _draw_rich(draw, (WIDTH // 2, y), line, font, theme.ink, theme, anchor="mt")
         y += int(font.size * 1.35)
     if price_label:
         pf, pl = _fit_lines(draw, price_label, "bold", range(70, 41, -4), w, 1)
@@ -998,7 +1056,7 @@ def render_illustrated_cover(*, out_path: Path, number: int, genre: dict, hook: 
         yy += lh
     draw = ImageDraw.Draw(img)
     for line in lines:
-        draw.text((MARGIN, y), line, font=font, fill=theme.ink)
+        _draw_rich(draw, (MARGIN, y), line, font, theme.ink, theme)
         y += lh
     sf, sl = _fit_lines(draw, sub, "regular", range(40, 29, -2), w, 1)
     draw.text((MARGIN, y + 6), sl[0], font=sf, fill=theme.sub)
