@@ -31,7 +31,7 @@ SCALE = 0.86  # Instagram の画面（下のキャプション・右のボタン
 def _frame(slide: Path, out: Path, genre: dict, index: int, total: int, top_text: str, account_name: str) -> Path:
     """4:5 のスライドを 9:16 の紙のキャンバスに貼り、上に一言、下に進み具合を入れる."""
     theme = Theme(genre)
-    canvas = _paper(theme, index, size=(REEL_W, REEL_H))
+    canvas = _paper(theme, index, size=(REEL_W, REEL_H), cover=False)
     w, h = int(SLIDE_W * SCALE), int(SLIDE_H * SCALE)
     img = Image.open(slide).convert("RGB").resize((w, h), Image.LANCZOS)
     top = 300

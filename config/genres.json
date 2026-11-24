@@ -1,17 +1,24 @@
 {
   "_comment": "ジャンル設定。enabled が true のジャンルだけを使う（このアカウントはトレーニンググッズとプロテイン・サプリ専門）。audiences は投稿で語りかける相手、ng_words はこのジャンルで使ってはいけない表現（入っていたら文章を作り直す）。",
   "theme": {
-    "_comment": "手作り感のある、やさしいデザイン。色は3系統まで: 紙（paper）・紺のインク（ink, 紙とのコントラスト 10.6）・赤系（accent, 価格と購入導線のみ。紙と 4.0／白文字と 4.3）。マーカーとテープは淡い色で、文字の読みやすさを邪魔しない。赤い価格表示は『お得』に感じられやすい（Puccinelli et al. 2013）。青系の文字は信頼感（Labrecque & Milne 2012）。",
-    "paper": "#FBF6EC",
-    "ink": "#2B3A55",
-    "sub": "#5B6478",
-    "accent": "#D9472B",
-    "marker": "#FFE27A",
+    "_comment": "デザイン B（ブラック×オレンジ、すっきり）。調査した人気投稿の共通点（濃い背景・極太の見出し・数字の強調・毎回同じテンプレート）を取り入れ、装飾は細い線とラベルだけにしておしゃれにまとめた。色は3系統: 黒（背景）・白（文字）・オレンジ（数字・価格・購入ボタン）。白文字と背景のコントラスト比 18.4、オレンジと背景 6.0、ボタンの黒文字とオレンジ 6.0。",
+    "paper": "#141414",
+    "ink": "#FFFFFF",
+    "sub": "#B9B3AB",
+    "accent": "#F26B1D",
+    "on_accent": "#141414",
+    "number_color": "#F26B1D",
+    "split": "#F26B1D",
+    "marker": "none",
+    "card": "#F4EFE8",
+    "card_ink": "#161616",
+    "card_sub": "#6B6560",
+    "card_style": "soft",
+    "decor": "minimal",
+    "background": "stripe",
+    "heading": "heavy",
     "tapes": [
-      "#BFE3D0",
-      "#F7C9C4",
-      "#FBE7A1",
-      "#CFE0F7"
+      "#F26B1D"
     ]
   },
   "genres": [
@@ -52,7 +59,8 @@
         "必ず痩せる",
         "筋肉がつく"
       ],
-      "caution": "トレーニング器具の効果を断定しない（『これで必ず〇〇kg上がる』等は禁止）。安全に使うための一言を添えてよい。"
+      "caution": "トレーニング器具の効果を断定しない（『これで必ず〇〇kg上がる』等は禁止）。安全に使うための一言を添えてよい。",
+      "label_en": "TRAINING GEAR"
     },
     {
       "id": "supplement",
@@ -104,7 +112,8 @@
         "No.1"
       ],
       "caution": "食品（サプリ・プロテイン）なので、薬機法・健康増進法に従う。効果・効能（痩せる、筋肉がつく、疲労回復、免疫、病気の予防・改善など）を書かない。書けるのは、成分量・味・溶けやすさ・価格など商品情報にある事実だけ。機能性表示食品は届出表示の範囲だけ。『食事の補助として』『バランスの良い食事と一緒に』という書き方にする。",
-      "enabled": true
+      "enabled": true,
+      "label_en": "PROTEIN & SUPPLEMENT"
     },
     {
       "id": "gadget",
@@ -123,7 +132,8 @@
         "#デスクツアー",
         "#便利グッズ"
       ],
-      "enabled": false
+      "enabled": false,
+      "label_en": "GADGET"
     },
     {
       "id": "appliance",
@@ -141,7 +151,8 @@
         "#暮らしを整える",
         "#買ってよかった"
       ],
-      "enabled": false
+      "enabled": false,
+      "label_en": "HOME APPLIANCE"
     },
     {
       "id": "travel",
@@ -159,7 +170,8 @@
         "#旅の準備",
         "#パッキング"
       ],
-      "enabled": false
+      "enabled": false,
+      "label_en": "TRAVEL"
     },
     {
       "id": "book",
@@ -176,7 +188,8 @@
         "#本好き",
         "#おすすめ本"
       ],
-      "enabled": false
+      "enabled": false,
+      "label_en": "BOOKS"
     },
     {
       "id": "investment",
@@ -194,7 +207,8 @@
         "#お金の勉強"
       ],
       "caution": "特定の銘柄・金融商品の購入を勧めない。利益を保証する表現や断定的な予想は禁止。あくまで『学ぶための本・道具』として紹介する。",
-      "enabled": false
+      "enabled": false,
+      "label_en": "MONEY"
     }
   ]
 }

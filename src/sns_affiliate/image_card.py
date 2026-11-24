@@ -39,6 +39,10 @@ FONT_CANDIDATES = {
         str(_FONT_DIR / "MochiyPopOne-Regular.ttf"),
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
     ],
+    "latin": [  # 英字の小見出し・SWIPE など
+        str(_FONT_DIR / "BebasNeue-Regular.ttf"),
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
+    ],
     "bold": [  # 本文の強調: 丸ゴシック
         str(_FONT_DIR / "ZenMaruGothic-Bold.ttf"),
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
@@ -79,6 +83,10 @@ def _hex(color: str) -> tuple[int, int, int]:
 # 配色（config/genres.json の theme で上書きできる）
 # ---------------------------------------------------------------------------
 
+_MINIMAL = False  # 今描いているテーマが minimal か（Theme を作るたびに切り替わる）
+_LABEL_COLOR = [(255, 255, 255)]  # minimal のラベルの色
+
+
 class Theme:
     def __init__(self, genre: dict):
         g = genre or {}
@@ -94,7 +102,13 @@ class Theme:
         self.card_sub = _hex(g.get("card_sub", g.get("sub", "#5B6478")))
         n = g.get("number_color")
         self.number_color = _hex(n) if n else None  # 見出しの数字だけ色を変える（例: 黄色）
-        self.split = _hex(g["split"]) if g.get("split") else None  # 背景 split の斜めの帯の色
+        self.split = _hex(g["split"]) if g.get("split") else None  # 背景 split / stripe の斜めの帯の色
+        # 装飾: handmade（テープ・手書きの丸や線）/ minimal（細い線とラベルだけの、すっきりした装飾）
+        self.decor = g.get("decor", "handmade")
+        self.kicker = g.get("label_en", "")  # 表紙などに添える英字の小見出し（例: PROTEIN GUIDE）
+        global _MINIMAL
+        _MINIMAL = self.decor == "minimal"
+        _LABEL_COLOR[0] = self.accent
         self.card = _hex(g.get("card", "#FFFFFF"))
         self.dot = _hex(g.get("dot", "#E7DDC8"))
         # 背景: plain（無地の紙）/ watercolor（水彩のにじみ）/ gradient（やわらかいグラデーション）/
@@ -159,9 +173,13 @@ def _wrap(draw: ImageDraw.ImageDraw, text: str, font, max_width: int, max_lines:
         elif draw.textlength(cur + tok, font=font) <= max_width or not cur:
             cur += tok
         else:
-            if last_break >= 0 and draw.textlength(cur[: last_break + 1], font=font) >= max_width * 0.45:
+            if last_break >= 0 and draw.textlength(cur[: last_break + 1], font=font) >= max_width * 0.3:
                 lines.append(cur[: last_break + 1].rstrip())
                 cur = cur[last_break + 1 :].lstrip() + tok
+            elif tok in NO_LINE_START and len(cur) > 1:
+                # 句読点を行頭に置かないよう、前の1文字ごと次の行へ送る（追い出し）
+                lines.append(cur[:-1])
+                cur = cur[-1] + tok
             else:
                 lines.append(cur)
                 cur = tok
@@ -290,7 +308,7 @@ def _fit_lines(draw, text: str, weight: str, sizes: range, width: int, max_lines
 # 手作り感のある装飾
 # ---------------------------------------------------------------------------
 
-def _paper(theme: Theme, seed: int, size=(WIDTH, HEIGHT)) -> Image.Image:
+def _paper(theme: Theme, seed: int, size=(WIDTH, HEIGHT), cover: bool = True) -> Image.Image:
     """背景の紙。theme.background で種類を切り替える（どれも最後に紙の粒子を薄くのせる）."""
     w, h = size
     style = theme.background
@@ -345,6 +363,14 @@ def _paper(theme: Theme, seed: int, size=(WIDTH, HEIGHT)) -> Image.Image:
             else:
                 pts = [(x - 24 + i * 6, y + (6 if i % 2 else -6)) for i in range(9)]
                 draw.line(pts, fill=c, width=5, joint="curve")
+    elif style == "stripe" and cover:
+        # 濃い色の上に、細い斜めのラインを2本（すっきり・おしゃれ）
+        d = ImageDraw.Draw(img)
+        band = theme.split or theme.accent
+        d.polygon([(0, int(h * 0.80)), (w, int(h * 0.66)), (w, int(h * 0.66) + 26), (0, int(h * 0.80) + 26)], fill=band)
+        thin = _mix(theme.paper, band, 0.45)
+        d.polygon([(0, int(h * 0.80) + 52), (w, int(h * 0.66) + 52), (w, int(h * 0.66) + 58), (0, int(h * 0.80) + 58)],
+                  fill=thin)
     elif style == "split":
         # 2色を斜めに分けた背景（下側に帯）。上の濃い色に見出し、下はカードやボタンを置く
         band = theme.split or theme.accent
@@ -377,7 +403,10 @@ def _rng(*parts) -> random.Random:
 
 
 def _wobble(draw, x0: float, y0: float, x1: float, y1: float, color, width: int, seed, amp: float = 3.0):
-    """手で引いたような、少し揺れる線."""
+    """手で引いたような、少し揺れる線（minimal ではまっすぐな細い線）."""
+    if _MINIMAL:
+        draw.line([(x0, y0), (x1, y1)], fill=color, width=max(2, width - 2))
+        return
     r = _rng("w", seed, x0, y0)
     length = math.hypot(x1 - x0, y1 - y0)
     n = max(2, int(length / 18))
@@ -391,7 +420,10 @@ def _wobble(draw, x0: float, y0: float, x1: float, y1: float, color, width: int,
 
 
 def _hand_circle(draw, cx: float, cy: float, rx: float, ry: float, color, width: int, seed):
-    """少しずれて1周ちょっと描いたような、手書きの丸."""
+    """少しずれて1周ちょっと描いたような、手書きの丸（minimal ではきれいな丸）."""
+    if _MINIMAL:
+        draw.ellipse((cx - rx, cy - ry, cx + rx, cy + ry), outline=color, width=max(3, width - 1))
+        return
     r = _rng("c", seed, cx, cy)
     pts = []
     start = r.uniform(0, math.tau)
@@ -426,7 +458,20 @@ def _marker(base: Image.Image, x0: int, y0: int, x1: int, y1: int, color, alpha:
 
 def _tape(base: Image.Image, cx: int, cy: int, w: int, h: int, color, angle: float, text: str = "",
           font=None, text_color=(43, 58, 85)):
-    """マスキングテープ（半透明・端がギザギザ）。文字を書くこともできる."""
+    """マスキングテープ（半透明・端がギザギザ）。文字を書くこともできる.
+
+    minimal では、文字があるときだけ細い枠のラベルにして、飾りのテープは貼らない.
+    """
+    if _MINIMAL:
+        if not text:
+            return
+        d = ImageDraw.Draw(base)
+        tw = d.textlength(text, font=font)
+        pw, ph = int(tw + 44), int(h * 0.82)
+        box = (int(cx - pw / 2), int(cy - ph / 2), int(cx + pw / 2), int(cy + ph / 2))
+        d.rounded_rectangle(box, radius=ph // 2, outline=_LABEL_COLOR[0], width=3)
+        d.text((cx, cy), text, font=font, fill=_LABEL_COLOR[0], anchor="mm")
+        return
     layer = Image.new("RGBA", (w + 40, h + 40), (0, 0, 0, 0))
     d = ImageDraw.Draw(layer)
     zig = 6
@@ -446,6 +491,8 @@ def _card(base: Image.Image, box: tuple[int, int, int, int], theme: Theme, angle
     """メモ用紙のようなカード。返した layer に中身を描いてから commit() で影付き・少し傾けて貼る."""
     x0, y0, x1, y1 = box
     w, h = x1 - x0, y1 - y0
+    if theme.decor == "minimal":
+        angle, radius = 0.0, min(radius, 16)
     layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     d = ImageDraw.Draw(layer)
     pop = theme.card_style == "pop"
@@ -472,9 +519,28 @@ def _card(base: Image.Image, box: tuple[int, int, int, int], theme: Theme, angle
     return layer, d, commit
 
 
-def _canvas(genre: dict, number: int, *, number_label: str | None = None):
+def _spaced(text: str, gap: str = " ") -> str:
+    """英字の見出しを字間を空けて書く（例: P R O T E I N）. 日本語はそのまま."""
+    return gap.join(text) if text.isascii() else text
+
+
+def _canvas(genre: dict, number: int, *, number_label: str | None = None, cover: bool = False):
     theme = Theme(genre)
-    img = _paper(theme, number)
+    img = _paper(theme, number, cover=cover)
+    if theme.decor == "minimal":
+        draw = ImageDraw.Draw(img)
+        x = MARGIN
+        if theme.pr:
+            draw.rounded_rectangle((x, 60, x + 70, 100), radius=20, outline=theme.sub, width=2)
+            draw.text((x + 35, 80), "PR", font=_font("latin", 30), fill=theme.sub, anchor="mm")
+            x += 90
+        label = theme.kicker or theme.label
+        draw.text((x, 81), _spaced(label), font=_font("latin" if theme.kicker else "regular", 30), fill=theme.sub,
+                  anchor="lm")
+        draw.text((WIDTH - MARGIN, 81), _spaced(number_label or f"NO.{number:03d}"), font=_font("latin", 34),
+                  fill=theme.sub, anchor="rm")
+        draw.line([(MARGIN, 122), (WIDTH - MARGIN, 122)], fill=_mix(theme.paper, theme.sub, 0.35), width=1)
+        return img, draw, theme
     if theme.pr:
         _tape(img, MARGIN + 60, 78, 130, 54, theme.tape(0), -4, "PR", _font("bold", 32), theme.card_ink)
     draw = ImageDraw.Draw(img)
@@ -549,7 +615,12 @@ def _footer(img, theme: Theme, *, swipe: bool = True, note: str = "", account: s
         draw.text((MARGIN, y), note, font=_font("regular", 24), fill=theme.sub, anchor="ls")
     elif account:
         draw.text((MARGIN, HEIGHT - 44), f"@{account}", font=_font("regular", 28), fill=theme.sub, anchor="ls")
-    if swipe:
+    if swipe and theme.decor == "minimal":
+        x = WIDTH - MARGIN
+        draw.line([(x - 70, HEIGHT - 58), (x, HEIGHT - 58)], fill=theme.accent, width=3)
+        draw.line([(x - 14, HEIGHT - 68), (x, HEIGHT - 58), (x - 14, HEIGHT - 48)], fill=theme.accent, width=3)
+        draw.text((x - 86, HEIGHT - 44), _spaced("SWIPE"), font=_font("latin", 30), fill=theme.accent, anchor="rs")
+    elif swipe:
         x = WIDTH - MARGIN - 60
         draw.text((x, HEIGHT - 44), "スワイプしてね", font=_font("hand", 34), fill=theme.accent, anchor="rs")
         _wobble(draw, x + 8, HEIGHT - 58, x + 52, HEIGHT - 58, theme.accent, 5, "sw", amp=1.5)
@@ -744,7 +815,7 @@ def render_photo_slide(*, photo: Path, out_path: Path, caption: str = "", genre:
 
 def render_roundup_cover(*, out_path: Path, number: int, genre: dict, title: str, subtitle: str,
                          names: list[str], account_name: str = "") -> Path:
-    img, draw, theme = _canvas(genre, number)
+    img, draw, theme = _canvas(genre, number, cover=True)
     _tape(img, MARGIN + 130, 210, 250, 64, theme.tape(2), -3, f"保存版 {len(names)}選", _font("bold", 34), theme.card_ink)
     y = _title(img, theme, title, 280, f"rc{number}", range(96, 59, -4))
     draw = ImageDraw.Draw(img)
@@ -845,8 +916,12 @@ def render_roundup_summary(*, out_path: Path, number: int, genre: dict, rows: li
 
 def render_explainer_cover(*, out_path: Path, number: int, genre: dict, hook: str, sub: str,
                            account_name: str = "") -> Path:
-    img, draw, theme = _canvas(genre, number)
-    _tape(img, MARGIN + 150, 250, 290, 66, theme.tape(2), -3, "保存して見返してね", _font("bold", 32), theme.card_ink)
+    img, draw, theme = _canvas(genre, number, cover=True)
+    if theme.decor == "minimal":
+        draw.text((MARGIN, 250), _spaced("SAVE FOR LATER"), font=_font("latin", 34), fill=theme.accent, anchor="lm")
+        draw.line([(MARGIN, 280), (MARGIN + 90, 280)], fill=theme.accent, width=4)
+    else:
+        _tape(img, MARGIN + 150, 250, 290, 66, theme.tape(2), -3, "保存して見返してね", _font("bold", 32), theme.card_ink)
     w = WIDTH - MARGIN * 2
     font, lines = _fit_lines(draw, hook, theme.heading, range(124, 83, -4), w, 3)
     lh = int(font.size * 1.32)
@@ -867,9 +942,10 @@ def render_explainer_cover(*, out_path: Path, number: int, genre: dict, hook: st
     for line in sub_lines:
         draw.text((MARGIN, y), line, font=sub_font, fill=theme.sub)
         y += int(sub_font.size * 1.5)
-    for sx, sy, s in [(WIDTH - 150, 255, 26), (WIDTH - 105, 305, 16)]:  # きらっと光る落書き
-        draw.line([(sx - s, sy), (sx + s, sy)], fill=theme.accent, width=5)
-        draw.line([(sx, sy - s), (sx, sy + s)], fill=theme.accent, width=5)
+    if theme.decor != "minimal":
+        for sx, sy, s in [(WIDTH - 150, 255, 26), (WIDTH - 105, 305, 16)]:  # きらっと光る落書き
+            draw.line([(sx - s, sy), (sx + s, sy)], fill=theme.accent, width=5)
+            draw.line([(sx, sy - s), (sx, sy + s)], fill=theme.accent, width=5)
     _footer(img, theme, account=account_name)
     return _save(img, out_path)
 
@@ -1044,7 +1120,7 @@ def render_cta_slide(*, out_path: Path, number: int, genre: dict, short_name: st
 def render_illustrated_cover(*, out_path: Path, number: int, genre: dict, hook: str, sub: str,
                              illustration: Path, account_name: str = "") -> Path:
     """表紙: 上に見出し、下にイラスト（テープで貼った写真風）."""
-    img, draw, theme = _canvas(genre, number)
+    img, draw, theme = _canvas(genre, number, cover=True)
     w = WIDTH - MARGIN * 2
     font, lines = _fit_lines(draw, hook, theme.heading, range(100, 63, -4), w, 3)
     lh = int(font.size * 1.3)
