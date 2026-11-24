@@ -41,6 +41,8 @@ class Settings:
             "https://openapi.rakuten.co.jp/ichibams/api/IchibaItem/Search/20260701",
         )
     )
+    # 楽天の自動作業のスイッチ。true にするまで楽天 API には一切アクセスしない（メンテナンス中などに止めておく）
+    rakuten_enabled: bool = field(default_factory=lambda: _env_bool("RAKUTEN_ENABLED", False))
     min_review_count: int = field(default_factory=lambda: int(_env("MIN_REVIEW_COUNT", "30")))
     min_review_average: float = field(default_factory=lambda: float(_env("MIN_REVIEW_AVERAGE", "4.0")))
     repost_cooldown_days: int = field(default_factory=lambda: int(_env("REPOST_COOLDOWN_DAYS", "90")))
@@ -89,8 +91,12 @@ class Settings:
 
 
 def rakuten_ready(settings: "Settings") -> bool:
-    """楽天の3つのキーがそろっているか（そろうまでは A8.net だけで運用する）."""
-    return bool(settings.rakuten_app_id and settings.rakuten_access_key and settings.rakuten_affiliate_id)
+    """楽天を使ってよいか（スイッチ RAKUTEN_ENABLED が true で、3つのキーがそろっている）.
+
+    使えない間は A8.net の案件とお役立ち投稿だけで運用する。
+    """
+    return bool(settings.rakuten_enabled and settings.rakuten_app_id and settings.rakuten_access_key
+                and settings.rakuten_affiliate_id)
 
 
 def ig_api_url(settings: "Settings") -> str:

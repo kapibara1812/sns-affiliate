@@ -73,6 +73,10 @@ Instagram のキャプションに貼ったリンクはタップできません�
 - 動画は投稿から `REEL_KEEP_DAYS`（既定 7）日後に `docs/videos/` から削除します（GitHub Pages の容量 1GB 対策）
 - リールを作らない場合は、Variables に `MAKE_REELS` = `false` を登録します
 
+## 楽天の自動作業のスイッチ
+
+楽天の自動作業は、Variables の `RAKUTEN_ENABLED` を `true` にするまで**止まっています**（楽天ウェブサービスのメンテナンス中のため）。止めている間は楽天 API に一切アクセスせず、A8.net の案件とお役立ち投稿だけで下書きと投稿を作ります。`inbox/` の楽天の商品を指定したネタは、再開するまで後回しにします。
+
 ## A8.net 対応
 
 A8.net には商品検索の公開APIがないため、提携した案件を `config/a8_programs.json` に登録して使います（書き方は `config/a8_programs.example.json` と [GUIDE.md の STEP 10](GUIDE.md)）。

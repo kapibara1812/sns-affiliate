@@ -131,6 +131,14 @@ def tmp_project(tmp_path, monkeypatch):
     return tmp_path
 
 
+@pytest.fixture
+def rakuten_on(monkeypatch):
+    """楽天の商品を指定したネタ（inbox）を使うテスト用。本番の初期設定はオフ."""
+    monkeypatch.setenv("RAKUTEN_ENABLED", "true")
+    for k in ("RAKUTEN_APP_ID", "RAKUTEN_ACCESS_KEY", "RAKUTEN_AFFILIATE_ID"):
+        monkeypatch.setenv(k, "test")
+
+
 def _load(root):
     p = root / "data" / "posts.json"
     return json.loads(p.read_text()) if p.exists() else []
@@ -211,7 +219,7 @@ def test_item_code_from_url():
         item_code_from_url("https://www.amazon.co.jp/dp/xxx")
 
 
-def test_prepare_from_inbox_photos(tmp_project):
+def test_prepare_from_inbox_photos(tmp_project, rakuten_on):
     folder = tmp_project / "inbox" / "イヤホン"
     folder.mkdir(parents=True)
     (folder / "memo.txt").write_text(
@@ -252,7 +260,7 @@ def _write_memo(root, name, text, photos=0):
     return folder
 
 
-def test_inbox_single_without_photo(tmp_project):
+def test_inbox_single_without_photo(tmp_project, rakuten_on):
     _write_memo(tmp_project, "a", "https://item.rakuten.co.jp/shopA/x1/\n")
     s = config.Settings()
     post = pipeline.prepare(s, rakuten=FakeRakuten([]), writer=FakeWriter())
@@ -260,7 +268,7 @@ def test_inbox_single_without_photo(tmp_project):
     assert post["item_code"] == "shopA:x1" and len(post["images"]) == 1
 
 
-def test_inbox_roundup_from_urls(tmp_project):
+def test_inbox_roundup_from_urls(tmp_project, rakuten_on):
     urls = "\n".join(f"https://item.rakuten.co.jp/shop{i}/item{i}/" for i in range(4))
     _write_memo(tmp_project, "b", f"テーマ: 機内持ち込みグッズ\nジャンル: travel\n{urls}\n", photos=2)
     s = config.Settings()
@@ -364,7 +372,7 @@ def test_a8_inbox_rejects_non_sns_and_raw_links(tmp_project):
         pipeline.prepare(config.Settings(), writer=FakeWriter())
 
 
-def test_a8_raw_link_in_memo_gives_help(tmp_project):
+def test_a8_raw_link_in_memo_gives_help(tmp_project, rakuten_on):
     _write_memo(tmp_project, "y", "https://px.a8.net/svt/ejp?a8mat=ZZZ\n")
     with pytest.raises(RuntimeError, match="A8: 案件ID"):
         pipeline.prepare(config.Settings(), rakuten=FakeRakuten([]), writer=FakeWriter())
@@ -872,3 +880,25 @@ def test_draft_ai_images_are_cached_and_regenerated_on_edit(tmp_project):
     dr.save(edited)
     post = pipeline.publish_draft(s, image_gen=gen)
     assert "AIで作成したイメージ" in post["caption"] and len(gen.calls) == 3
+
+
+def test_rakuten_switch_off_never_touches_rakuten(tmp_project, monkeypatch):
+    monkeypatch.setenv("RAKUTEN_ENABLED", "false")
+    _only_training_supplement()
+    _write_programs(tmp_project)
+    _write_memo(tmp_project, "z", "https://item.rakuten.co.jp/shopA/x1/\n")
+
+    class Boom:
+        def search(self, *a, **k):
+            raise AssertionError("楽天にアクセスしてはいけない")
+
+        lookup = search
+
+    s = config.Settings()
+    assert not config.rakuten_ready(s)
+    # 自動投稿: 楽天のネタ（inbox）は後回しにして、A8 案件を使う
+    post = pipeline.prepare(s, writer=FakeWriter(), rakuten=Boom())
+    assert post["network"] == "a8" and (tmp_project / "inbox" / "z").exists()
+    # 下書き作り: 楽天の商品を探しに行かない
+    made = pipeline.generate_drafts(s, count=4, writer=FakeWriter(), rng=random.Random(0), render_previews=False)
+    assert all(d.kind in ("a8", "tips") for d in made)

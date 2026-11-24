@@ -85,6 +85,8 @@ def prepare(settings: config.Settings, *, genre_id: str | None = None, use_inbox
     programs = a8.load_programs()
 
     entries = inbox.list_entries(inbox_dir) if use_inbox else []
+    if not config.rakuten_ready(settings):  # 楽天を止めている間は、楽天の商品を指定したネタは後回しにする
+        entries = [e for e in entries if e.a8_id]
     entry = entries[0] if entries else None
     program = None
     a8_only = mode == "auto" and not config.rakuten_ready(settings)  # 楽天が未設定の間は A8 だけで運用
