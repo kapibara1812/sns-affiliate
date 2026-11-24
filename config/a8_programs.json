@@ -1,0 +1,125 @@
+{
+  "programs": [
+    {
+      "id": "saily",
+      "name": "Saily（海外旅行用eSIM）",
+      "genre": "travel",
+      "link": "https://px.a8.net/svt/ejp?a8mat=4BGPOU+6PQ0DU+5L2C+5YRHE",
+      "impression": "https://www15.a8.net/0.gif?a8mat=4BGPOU+6PQ0DU+5L2C+5YRHE",
+      "sns_allowed": true,
+      "price_label": "US$2.99〜",
+      "facts": [
+        "150か国以上をカバー",
+        "VPN「NordVPN」を手掛けるNord Securityが開発",
+        "1GBから無制限までのプランを国・地域別に用意",
+        "料金はUS$2.99から（国・地域別プラン）"
+      ],
+      "ng_words": [
+        "最安",
+        "No.1",
+        "ナンバーワン",
+        "業界一",
+        "絶対"
+      ],
+      "notes": "初めて利用する人向けに紹介する（既存利用者は対象外）。ウェブサイトからの申込が対象なので、アプリからの申込は勧めない。",
+      "enabled": true
+    },
+    {
+      "id": "tora-esim",
+      "name": "TORA eSIM（海外旅行用eSIM）",
+      "genre": "travel",
+      "link": "https://px.a8.net/svt/ejp?a8mat=4BGPOU+6RIB76+5NG6+5YRHE",
+      "impression": "https://www10.a8.net/0.gif?a8mat=4BGPOU+6RIB76+5NG6+5YRHE",
+      "sns_allowed": true,
+      "price_label": "",
+      "facts": [
+        "現地SIMカードやポケットWi-Fiが不要",
+        "出発前にオンラインで購入し、渡航先に到着後すぐ利用できる",
+        "0.5GBから無制限まで多様なプラン",
+        "世界中の地域に対応"
+      ],
+      "ng_words": [
+        "最安",
+        "No.1",
+        "ナンバーワン",
+        "業界一",
+        "絶対"
+      ],
+      "notes": "",
+      "enabled": true
+    },
+    {
+      "id": "gorilla-squad",
+      "name": "GORILLA SQUAD（筋トレギア）",
+      "genre": "training",
+      "link": "https://px.a8.net/svt/ejp?a8mat=4BGPOU+73EZAQ+5XUC+5YRHE",
+      "impression": "https://www13.a8.net/0.gif?a8mat=4BGPOU+73EZAQ+5XUC+5YRHE",
+      "sns_allowed": true,
+      "price_label": "",
+      "facts": [
+        "IFBB PROとの共同開発・監修のトレーニングギア",
+        "パワーグリップ・トレーニングベルト・リストラップ・スリーブなどをまとめて揃えられる",
+        "日本発の正規ブランド",
+        "ベストプライス保証",
+        "3,980円（税込）以上で送料無料"
+      ],
+      "ng_words": [
+        "最安",
+        "No.1",
+        "ナンバーワン",
+        "業界一",
+        "絶対"
+      ],
+      "notes": "公式オンラインストアからの購入が対象。LINE・アウトレットショップ・公式グッズショップからの購入は勧めない。",
+      "enabled": true
+    },
+    {
+      "id": "oz-gaming",
+      "name": "OZ GAMING（BTOゲーミングPC）",
+      "genre": "gadget",
+      "link": "https://px.a8.net/svt/ejp?a8mat=4BGPOU+6UHH82+5U1O+5YRHE",
+      "impression": "https://www10.a8.net/0.gif?a8mat=4BGPOU+6UHH82+5U1O+5YRHE",
+      "sns_allowed": true,
+      "price_label": "144,800円〜（税込）",
+      "facts": [
+        "Ryzen／Coreシリーズ×RTX搭載の高性能モデルを多数ラインナップ",
+        "ARGB対応のフルLEDケースなどデザインにもこだわり",
+        "1年保証＋全国サポート体制",
+        "全国送料無料"
+      ],
+      "ng_words": [
+        "最安",
+        "No.1",
+        "ナンバーワン",
+        "業界一",
+        "絶対"
+      ],
+      "notes": "価格は公式サイト掲載モデルの最安値表記ではなく「〜から」として扱う。",
+      "enabled": true
+    },
+    {
+      "id": "breeze-hawaii",
+      "name": "ブリーズハワイ（ハワイのマリンツアー）",
+      "genre": "travel",
+      "link": "https://px.a8.net/svt/ejp?a8mat=4BGPOU+75SPPU+5Y8I+5YRHE",
+      "impression": "https://www14.a8.net/0.gif?a8mat=4BGPOU+75SPPU+5Y8I+5YRHE",
+      "sns_allowed": true,
+      "price_label": "",
+      "facts": [
+        "ウミガメ遭遇率99%（公式サイトの表記）",
+        "1983年創業・日本人経営で日本語対応スタッフがいる",
+        "自社ボート3艇",
+        "インストラクター1名につき4名までの少人数制"
+      ],
+      "ng_words": [
+        "最安",
+        "No.1",
+        "ナンバーワン",
+        "業界一",
+        "絶対"
+      ],
+      "notes": "ウミガメ遭遇率は「公式サイトによると」と出典を添えて書き、必ず会えるような書き方はしない。ウェブ予約が対象。",
+      "enabled": true
+    }
+  ]
+}

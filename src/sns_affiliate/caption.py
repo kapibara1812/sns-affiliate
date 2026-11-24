@@ -81,6 +81,256 @@ ROUNDUP_SCHEMA = {
 }
 
 
+def _str(desc: str) -> dict:
+    return {"type": "string", "description": desc}
+
+
+def _strs(desc: str) -> dict:
+    return {"type": "array", "items": {"type": "string"}, "description": desc}
+
+
+EXPLAINER_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "cover_hook": _str("1枚目の大見出し。思わず指が止まる問いかけや『あるある』。全角22文字以内。"),
+        "cover_sub": _str("1枚目の小見出し。この投稿で分かること。全角26文字以内。"),
+        "short_name": _str("サービス名を短くしたもの。全角16文字以内。"),
+        "pains_title": _str("2枚目の見出し。例『こんな悩み、ありませんか？』。全角16文字以内。"),
+        "pains": _strs("読者が感じている困りごと3つ。一般的な内容。各全角22文字以内。"),
+        "compare": {
+            "type": "object",
+            "description": "一般的な選択肢の比較表。比べる意味がない場合は title を空文字、rows を空配列にする。",
+            "properties": {
+                "title": _str("比較表の見出し。全角16文字以内。"),
+                "columns": _strs("比べる選択肢（2〜3個）。他社名ではなく一般的な手段の種類で書く。紹介するサービスの種類を最後に置く。各全角8文字以内。"),
+                "rows": {
+                    "type": "array",
+                    "description": "比較の観点（3〜4行）。",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "label": _str("観点。例『準備の手間』。全角8文字以内。"),
+                            "values": _strs("columns と同じ順番・同じ数の評価。◎○△× か、ごく短い言葉（全角6文字以内）。具体的な金額は書かない。"),
+                        },
+                        "required": ["label", "values"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "required": ["title", "columns", "rows"],
+            "additionalProperties": False,
+        },
+        "steps_title": _str("使い方・選び方の手順の見出し。不要なら空文字。全角16文字以内。"),
+        "steps": {
+            "type": "array",
+            "description": "一般的な手順（0〜4個）。不要なら空配列。",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "title": _str("手順の名前。全角12文字以内。"),
+                    "desc": _str("ひとこと説明。全角26文字以内。"),
+                },
+                "required": ["title", "desc"],
+                "additionalProperties": False,
+            },
+        },
+        "features": _strs("サービスのポイント3〜4個。<service> の『公式に確認できる特徴』に書かれた事実だけ。各全角24文字以内。"),
+        "fit": _strs("こんな人に向いている、を3つ。各全角22文字以内。"),
+        "caption": _str("キャプション本文（ハッシュタグは含めない）。300〜600文字。保存を促す一文を入れる。"),
+        "hashtags": HASHTAGS_SCHEMA,
+        "cover_image_prompt": _str(
+            "表紙に入れるイラストの説明（英語、1〜2文）。テーマが一目で分かるモノや場面を描く。"
+            "実在の商品・ブランド・ロゴ・文字・リアルな人物は入れない。例: 'A protein shaker and a towel on a gym bench'"),
+        "scene_image_prompt": _str(
+            "使用シーンのイメージ画像の説明（英語、1〜2文）。紹介するものが役立つ場面の雰囲気を描く。"
+            "実在の商品・ブランド・ロゴ・文字・リアルな人物は入れない。人を描くなら顔のないシンプルな人物。"),
+    },
+    "required": ["cover_hook", "cover_sub", "short_name", "pains_title", "pains", "compare", "steps_title",
+                 "steps", "features", "fit", "caption", "hashtags", "cover_image_prompt", "scene_image_prompt"],
+    "additionalProperties": False,
+}
+
+
+PATTERNS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "patterns": {
+            "type": "array",
+            "description": "伸びた投稿の1行目（表紙の見出し・キャプション1行目）に共通する型を5つ。",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": _str("型の名前。例『数字で損を突く』。全角16文字以内。"),
+                    "template": _str("穴埋めできるテンプレート。例『{商品ジャンル}選びで{数字}割の人が損してる』。"),
+                    "why": _str("なぜ刺さるのか（データから読み取れる理由）。全角60文字以内。"),
+                    "examples": _strs("集めた投稿の中から、この型に当てはまる1行目を2〜3個（そのまま引用）。"),
+                },
+                "required": ["name", "template", "why", "examples"],
+                "additionalProperties": False,
+            },
+        },
+        "structures": _strs("伸びたカルーセル・リールに多い構成（例『悩み→比較→おすすめ3選→まとめ』）を3つまで。"),
+        "design_notes": _strs("デザインの共通点（配色・文字の大きさ・写真の使い方など）を5つまで。"),
+        "summary": _str("全体のまとめ。全角200文字以内。"),
+    },
+    "required": ["patterns", "structures", "design_notes", "summary"],
+    "additionalProperties": False,
+}
+
+
+@dataclass
+class ExplainerCopy:
+    cover_hook: str
+    cover_sub: str
+    short_name: str
+    pains_title: str
+    pains: list[str]
+    compare_title: str
+    compare_columns: list[str]
+    compare_rows: list[tuple[str, list[str]]]
+    steps_title: str
+    steps: list[tuple[str, str]]
+    features: list[str]
+    fit: list[str]
+    caption: str
+    hashtags: list[str]
+    cover_image_prompt: str = ""
+    scene_image_prompt: str = ""
+
+    def all_text(self) -> list[str]:
+        out = [self.cover_hook, self.cover_sub, self.short_name, self.pains_title, *self.pains,
+               self.compare_title, *self.compare_columns, self.steps_title, *self.features, *self.fit, self.caption]
+        for label, values in self.compare_rows:
+            out += [label, *values]
+        for t, d in self.steps:
+            out += [t, d]
+        return out
+
+
+def parse_explainer(data: dict) -> ExplainerCopy:
+    cmp = data.get("compare") or {}
+    cols = [c.strip() for c in cmp.get("columns", [])][:3]
+    rows = []
+    for r in cmp.get("rows", [])[:4]:
+        vals = [v.strip() for v in r.get("values", [])]
+        if cols and len(vals) >= len(cols):
+            rows.append((r.get("label", "").strip(), vals[: len(cols)]))
+    if len(cols) < 2 or not rows:
+        cols, rows = [], []
+    steps = [(s.get("title", "").strip(), s.get("desc", "").strip()) for s in data.get("steps", [])][:4]
+    return ExplainerCopy(
+        cover_hook=data["cover_hook"].strip(),
+        cover_sub=data["cover_sub"].strip(),
+        short_name=data["short_name"].strip(),
+        pains_title=data["pains_title"].strip() or "こんな悩み、ありませんか？",
+        pains=[x.strip() for x in data["pains"] if x.strip()][:3],
+        compare_title=(cmp.get("title") or "").strip() if rows else "",
+        compare_columns=cols,
+        compare_rows=rows,
+        steps_title=data.get("steps_title", "").strip() if steps else "",
+        steps=steps,
+        features=[x.strip() for x in data["features"] if x.strip()][:4],
+        fit=[x.strip() for x in data["fit"] if x.strip()][:3],
+        caption=data["caption"].strip(),
+        hashtags=normalize_hashtags(data["hashtags"]),
+        cover_image_prompt=(data.get("cover_image_prompt") or "").strip(),
+        scene_image_prompt=(data.get("scene_image_prompt") or "").strip(),
+    )
+
+
+def build_a8_explainer_prompt(program, genre: dict, number: int, avoid: list[str] | None = None) -> str:
+    facts = "\n".join(f"- {f}" for f in program.facts)
+    ng = program.ng_words + (avoid or [])
+    return f"""{_genre_header(genre, number)}
+<service>
+サービス名: {program.name}
+料金の表記: {program.price_label or '（指定なし。料金には触れない）'}
+公式に確認できる特徴:
+{facts}
+{f'補足: {program.notes}' if program.notes else ''}
+</service>
+
+（投稿者本人の利用経験はありません。体験談は書かないでください）
+
+このサービス（A8.net の広告案件）を紹介する、Instagram の「図解カルーセル投稿」の原稿を作ってください。
+読者が『保存して後で見返したい』と思う、役に立つ情報 → 最後にサービス紹介、の流れにします。
+
+スライド構成（システムがこの順に画像にします）:
+1. 表紙（cover_hook / cover_sub）: 読者の『あるある』や疑問で指を止める
+2. 悩み（pains）: 読者がこのジャンルで困りがちなこと
+3. 比較表（compare）: 一般的な選択肢を、手間・使いやすさなどの観点で ◎○△× で比べる
+4. 手順（steps）: 一般的な使い方や選び方（不要なら空）
+5. 公式画像（システムが入れる）
+6. サービスのポイント（features）
+7. こんな人に（fit）
+8. まとめ・料金・購入導線（システムが入れる）
+
+守ること:
+- features は <service> の特徴に書かれた事実だけを使う。料金・特典・数値を新しく作らない。
+- pains / compare / steps は一般的な内容にとどめ、具体的な金額・他社名・他社の性能は書かない。
+- 比較表で、紹介するサービスの種類を不当に持ち上げない（短所があれば△を付ける）。
+- キャプションには「条件や最新の内容は公式サイトで確認してね」という一文を入れる。
+{f'- 次の表現は広告主のルールで禁止なので使わない: {"、".join(ng)}' if ng else ''}
+キャプションの最後は「詳しくはプロフィールのリンク → #{number:03d} からチェックしてね」の趣旨で締めてください。
+ハッシュタグには次のジャンル定番タグも含めてください: {' '.join(genre.get('hashtags', []))}
+"""
+
+
+def build_draft_prompt(subject: dict, genre: dict, pattern: dict, audience: str, avoid: list[str] | None = None,
+                       remix_of: dict | None = None) -> str:
+    """下書き用の図解カルーセル原稿のプロンプト.
+
+    subject: {"kind": "a8"|"rakuten"|"tips", "name", "facts", "price_label", "notes", "ng_words"}
+    """
+    ng = list(genre.get("ng_words", [])) + list(subject.get("ng_words", [])) + list(avoid or [])
+    caution = genre.get("caution", "")
+    if subject["kind"] == "tips":
+        about = f"""<topic>
+テーマ: {subject['name']}
+（商品の紹介はしない、お役立ち投稿。features には役立つポイントを書く。体験談は書かない）
+</topic>"""
+        tail = "キャプションの最後は「他の投稿もプロフィールからどうぞ。保存して見返してね」の趣旨で締めてください。"
+    else:
+        facts = "\n".join(f"- {f}" for f in subject.get("facts", []))
+        about = f"""<service>
+紹介するもの: {subject['name']}
+料金の表記: {subject.get('price_label') or '（指定なし。料金には触れない）'}
+公式に確認できる特徴（features はここに書かれた事実だけを使う）:
+{facts}
+{f"補足: {subject['notes']}" if subject.get('notes') else ''}
+</service>
+（投稿者本人の利用経験はありません。体験談は書かないでください）"""
+        tail = "キャプションの最後は「詳しくはプロフィールのリンク → 番号からチェックしてね」の趣旨で締めてください（番号はシステムが入れるので書かない）。"
+    remix = ""
+    if remix_of:
+        remix = f"""
+<previous_hit>
+この投稿は以前よく保存された投稿の作り直しです。同じ内容の繰り返しにならないよう、切り口（対象の人・比べる観点・語り口）を変えてください。
+前回の表紙: {remix_of.get('headline', '')}
+前回のキャプション冒頭: {remix_of.get('caption', '')[:200]}
+</previous_hit>"""
+    return f"""ジャンル: {genre['label']}
+語りかける相手: {audience}
+{f'このジャンルの注意事項: {caution}' if caution else ''}
+
+{about}
+{remix}
+<hook_pattern>
+表紙（cover_hook）とキャプションの1行目は、次の型を使ってください。
+型の名前: {pattern['name']}
+テンプレート: {pattern['template']}
+刺さる理由: {pattern.get('why', '')}
+</hook_pattern>
+
+Instagram の図解カルーセル投稿の原稿を作ってください（表紙 → 悩み → 比較 → 手順 → ポイント → こんな人に → まとめ）。
+- pains / compare / steps は一般的な内容にとどめ、具体的な金額・他社名・他社の性能は書かない。
+- 比較表で、紹介するものを不当に持ち上げない。
+{f'- 次の表現は使わない: {"、".join(dict.fromkeys(ng))}' if ng else ''}
+{tail}
+ハッシュタグには次のジャンル定番タグも含めてください: {' '.join(genre.get('hashtags', []))}
+"""
+
+
 @dataclass
 class PostCopy:
     headline: str
@@ -260,6 +510,48 @@ class CaptionGenerator:
             avoid = found
         raise RuntimeError(f"A8案件 {program.id}: 禁止表現 {found} を含まない投稿文を作れませんでした")
 
+    def generate_a8_explainer(self, program, genre: dict, number: int) -> ExplainerCopy:
+        """写真がない A8 案件用の図解カルーセル原稿。NG ワードがあれば1回だけ作り直す."""
+        from .a8 import find_ng_words
+
+        avoid: list[str] = []
+        for _ in range(2):
+            prompt = build_a8_explainer_prompt(program, genre, number, avoid)
+            copy = parse_explainer(self._call([{"type": "text", "text": prompt}], EXPLAINER_SCHEMA))
+            found = find_ng_words(program, *copy.all_text())
+            if not found:
+                return copy
+            avoid = found
+        raise RuntimeError(f"A8案件 {program.id}: 禁止表現 {found} を含まない投稿文を作れませんでした")
+
+    def generate_draft(self, subject: dict, genre: dict, pattern: dict, audience: str,
+                       remix_of: dict | None = None) -> "ExplainerCopy":
+        """下書き1本分の原稿。ジャンル・案件の禁止表現が入っていたら1回だけ作り直す."""
+        ng = list(genre.get("ng_words", [])) + list(subject.get("ng_words", []))
+        avoid: list[str] = []
+        found: list[str] = []
+        for _ in range(2):
+            prompt = build_draft_prompt(subject, genre, pattern, audience, avoid, remix_of)
+            copy = parse_explainer(self._call([{"type": "text", "text": prompt}], EXPLAINER_SCHEMA))
+            joined = "\n".join(copy.all_text())
+            found = [w for w in ng if w and w in joined]
+            if not found:
+                return copy
+            avoid = found
+        raise RuntimeError(f"禁止表現 {found} を含まない下書きを作れませんでした（{subject['name']}）")
+
+    def analyze_patterns(self, rows_text: str, genre_label: str) -> dict:
+        """調査で集めた投稿（1行目と反応の数）から、刺さる1行目の型を5つ抜き出す."""
+        prompt = f"""以下は、Instagram の「{genre_label}」ジャンルで伸びている日本語アカウントの投稿を集めたものです。
+反応（いいね・保存・再生）が多い投稿ほど重視して、
+「この投稿の1行目（表紙の見出し・キャプションの1行目）に共通していること」を5つの型にまとめてください。
+型は、別の商品にも使い回せるテンプレートにしてください。データから言えないことは書かないでください。
+
+<posts>
+{rows_text}
+</posts>"""
+        return self._call([{"type": "text", "text": prompt}], PATTERNS_SCHEMA)
+
     def generate_roundup(self, items: list[Item], genre: dict, number: int, theme: str,
                          comment: str = "") -> RoundupCopy:
         prompt = build_roundup_prompt(items, genre, number, theme, comment)
@@ -350,3 +642,8 @@ def compose_a8_caption(copy: PostCopy, program) -> str:
         + _with_pr(copy.hashtags)
     )
     return body[:2200]
+
+
+def compose_a8_explainer_caption(copy: ExplainerCopy, program) -> str:
+    return compose_a8_caption(PostCopy(headline=copy.cover_hook, points=copy.features, short_name=copy.short_name,
+                                       caption=copy.caption, hashtags=copy.hashtags), program)

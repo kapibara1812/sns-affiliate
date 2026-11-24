@@ -13,6 +13,9 @@ POSTS_FILE = ROOT / "data" / "posts.json"
 INSIGHTS_CSV = ROOT / "data" / "insights.csv"
 DOCS_DIR = ROOT / "docs"
 IMAGES_DIR = DOCS_DIR / "images"
+VIDEOS_DIR = DOCS_DIR / "videos"
+DRAFTS_DIR = ROOT / "drafts"
+DRAFT_PREVIEW_DIR = DOCS_DIR / "drafts"
 
 
 def _env(name: str, default: str = "") -> str:
@@ -38,6 +41,8 @@ class Settings:
             "https://openapi.rakuten.co.jp/ichibams/api/IchibaItem/Search/20260701",
         )
     )
+    # 楽天の自動作業のスイッチ。true にするまで楽天 API には一切アクセスしない（メンテナンス中などに止めておく）
+    rakuten_enabled: bool = field(default_factory=lambda: _env_bool("RAKUTEN_ENABLED", False))
     min_review_count: int = field(default_factory=lambda: int(_env("MIN_REVIEW_COUNT", "30")))
     min_review_average: float = field(default_factory=lambda: float(_env("MIN_REVIEW_AVERAGE", "4.0")))
     repost_cooldown_days: int = field(default_factory=lambda: int(_env("REPOST_COOLDOWN_DAYS", "90")))
@@ -49,6 +54,20 @@ class Settings:
     # A8.net: 自動モードで A8 案件を投稿する曜日（1=月 … 7=日）と、同じ案件を再投稿するまでの日数
     a8_weekdays: str = field(default_factory=lambda: _env("A8_WEEKDAYS", "1,4"))
     a8_cooldown_days: int = field(default_factory=lambda: int(_env("A8_COOLDOWN_DAYS", "14")))
+
+    # リール動画: カルーセル（3枚以上）からリールを作り、翌日に別の時間で投稿する
+    make_reels: bool = field(default_factory=lambda: _env_bool("MAKE_REELS", True))
+    reel_keep_days: int = field(default_factory=lambda: int(_env("REEL_KEEP_DAYS", "7")))
+
+    # 下書きの確認ページから GitHub の編集画面へ飛ぶためのリポジトリ名（GitHub Actions では自動で入る）
+    repo_slug: str = field(default_factory=lambda: _env("GITHUB_REPOSITORY") or _env("REPO_SLUG"))
+    drafts_per_batch: int = field(default_factory=lambda: int(_env("DRAFTS_PER_BATCH", "10")))
+
+    # 画像生成（OpenAI）。キーがなければ画像生成はせず、これまでどおり文字と図だけで作る
+    openai_api_key: str = field(default_factory=lambda: _env("OPENAI_API_KEY"))
+    image_model: str = field(default_factory=lambda: _env("OPENAI_IMAGE_MODEL", "gpt-image-2"))
+    image_quality: str = field(default_factory=lambda: _env("OPENAI_IMAGE_QUALITY", "low"))  # low / medium / high
+    generate_images: bool = field(default_factory=lambda: _env_bool("GENERATE_IMAGES", True))
 
     # Claude
     claude_model: str = field(default_factory=lambda: _env("CLAUDE_MODEL", "claude-opus-5-5"))
@@ -72,8 +91,12 @@ class Settings:
 
 
 def rakuten_ready(settings: "Settings") -> bool:
-    """楽天の3つのキーがそろっているか（そろうまでは A8.net だけで運用する）."""
-    return bool(settings.rakuten_app_id and settings.rakuten_access_key and settings.rakuten_affiliate_id)
+    """楽天を使ってよいか（スイッチ RAKUTEN_ENABLED が true で、3つのキーがそろっている）.
+
+    使えない間は A8.net の案件とお役立ち投稿だけで運用する。
+    """
+    return bool(settings.rakuten_enabled and settings.rakuten_app_id and settings.rakuten_access_key
+                and settings.rakuten_affiliate_id)
 
 
 def ig_api_url(settings: "Settings") -> str:

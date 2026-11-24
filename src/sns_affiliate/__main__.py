@@ -44,6 +44,67 @@ def cmd_publish(args, settings):
     return 1 if failed else 0
 
 
+def cmd_analyze_research(args, settings):
+    from . import research
+    from .caption import CaptionGenerator
+
+    labels = "・".join(g["label"] for g in config.load_genres())
+    result = research.analyze(CaptionGenerator(settings.claude_model), labels)
+    print(f"{result['source_count']} 本の投稿から、刺さる1行目の型を {len(result['patterns'])} つまとめました → research/patterns.md")
+    for p in result["patterns"]:
+        print(f"- {p['name']}: {p['template']}")
+
+
+def cmd_make_drafts(args, settings):
+    made = pipeline.generate_drafts(settings, count=args.count)
+    print(f"下書きを {len(made)} 本作りました → drafts/（確認ページ: {settings.public_base_url}/drafts/）")
+    for d in made:
+        print(f"- {d.id:04d} [{d.kind}] {d.copy.cover_hook}")
+
+
+def cmd_remix(args, settings):
+    made = pipeline.remix_hits(settings, limit=args.limit)
+    print(f"伸びた投稿の作り直しを {len(made)} 本作りました")
+
+
+def cmd_drafts_preview(args, settings):
+    from . import drafts as dr
+
+    targets = dr.list_drafts()
+    if args.only:
+        targets = [d for d in targets if d.id in set(args.only)]
+    from .imagegen import ImageGenerator
+
+    gen = ImageGenerator(settings)
+    for d in targets:
+        dr.render_preview(d, settings.account_name, gen=gen)
+    dr.build_page(settings.repo_slug)
+    print(f"{len(targets)} 本の下書きの画像と、確認ページを作り直しました")
+
+
+def cmd_publish_draft(args, settings):
+    try:
+        post = pipeline.publish_draft(settings)
+    except pipeline.NothingToPost as e:
+        print(f"お休み: {e}")
+        return 0
+    print(f"下書き {post['draft_id']:04d} を投稿 #{post['number']:03d} として準備しました（{len(post['images'])}枚）")
+
+
+def cmd_publish_reel(args, settings):
+    results = pipeline.publish_reels(settings, wait=not args.no_wait, limit=args.limit)
+    if not results:
+        print("投稿待ちのリールはありません")
+    failed = False
+    for p in results:
+        if p.get("reel_status") == "published":
+            print(f"#{p['number']:03d} のリールを公開しました: {p.get('reel_permalink')}")
+        else:
+            failed = True
+            print(f"#{p['number']:03d} のリールの公開に失敗: {p.get('reel_error')}", file=sys.stderr)
+    return 1 if failed else 0
+
+
 def cmd_insights(args, settings):
     n = pipeline.collect_insights(settings)
     print(f"{n} 件のインサイトを更新しました → {config.INSIGHTS_CSV.relative_to(config.ROOT)}")
@@ -126,6 +187,24 @@ def main(argv=None) -> int:
     p.add_argument("--limit", type=int, default=1)
     p.add_argument("--no-wait", action="store_true", help="画像URLの公開待ちをしない")
     p.set_defaults(func=cmd_publish)
+
+    sub.add_parser("analyze-research", help="① research/posts.csv から刺さる1行目の型をまとめる").set_defaults(
+        func=cmd_analyze_research)
+    p = sub.add_parser("make-drafts", help="③ 下書きをまとめて作る")
+    p.add_argument("--count", type=int, default=None)
+    p.set_defaults(func=cmd_make_drafts)
+    p = sub.add_parser("remix", help="④ 保存が多かった投稿を、角度を変えた下書きにする")
+    p.add_argument("--limit", type=int, default=2)
+    p.set_defaults(func=cmd_remix)
+    p = sub.add_parser("drafts-preview", help="下書きの画像と確認ページを作り直す")
+    p.add_argument("--only", type=int, nargs="*", help="下書きの番号（省略時はすべて）")
+    p.set_defaults(func=cmd_drafts_preview)
+    sub.add_parser("publish-draft", help="承認済みの下書きを1本、投稿データにする").set_defaults(func=cmd_publish_draft)
+
+    p = sub.add_parser("publish-reel", help="カルーセル投稿済みのリール動画を公開する（翌日用）")
+    p.add_argument("--limit", type=int, default=1)
+    p.add_argument("--no-wait", action="store_true", help="動画URLの公開待ちをしない")
+    p.set_defaults(func=cmd_publish_reel)
 
     sub.add_parser("insights", help="投稿のインサイトを取得して CSV 出力").set_defaults(func=cmd_insights)
     sub.add_parser("site", help="プロフィールリンク用ページを再生成").set_defaults(func=cmd_site)

@@ -104,6 +104,8 @@ def build_site(posts: list[dict], genres: list[dict], title: str, out_dir: Path 
         items = storage.post_items(p)
         roundup = p.get("kind") == "roundup"
         for i, it in enumerate(items, start=1):
+            if not it.get("affiliate_url"):  # 広告なしのお役立ち投稿は一覧に載せない
+                continue
             label = f"{p['number']:03d}-{i}" if roundup else f"{p['number']:03d}"
             is_a8 = it.get("network") == "a8"
             meta = f"¥{it['price']:,}" if it.get("price") else (it.get("price_label") or "公式サイトで詳細を確認")

@@ -1,0 +1,52 @@
+name: drafts-preview
+
+# 下書きの文章を GitHub 上で直したら、確認ページの画像を作り直す
+on:
+  push:
+    branches: [main]
+    paths: ["drafts/*.md"]
+  workflow_dispatch:
+
+concurrency:
+  group: sns-affiliate
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONPATH: src
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_IMAGE_MODEL: ${{ vars.OPENAI_IMAGE_MODEL }}
+      OPENAI_IMAGE_QUALITY: ${{ vars.OPENAI_IMAGE_QUALITY }}
+      RAKUTEN_ENABLED: ${{ vars.RAKUTEN_ENABLED }}
+      RAKUTEN_APP_ID: ${{ secrets.RAKUTEN_APP_ID }}
+      RAKUTEN_ACCESS_KEY: ${{ secrets.RAKUTEN_ACCESS_KEY }}
+      RAKUTEN_AFFILIATE_ID: ${{ secrets.RAKUTEN_AFFILIATE_ID }}
+      PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
+      IG_ACCOUNT_NAME: ${{ vars.IG_ACCOUNT_NAME }}
+      CLAUDE_MODEL: ${{ vars.CLAUDE_MODEL }}
+      DRAFTS_PER_BATCH: ${{ vars.DRAFTS_PER_BATCH }}
+      IG_USER_ID: ${{ secrets.IG_USER_ID }}
+      IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Re-render previews
+        run: python -m sns_affiliate drafts-preview
+      - name: Commit
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A docs/drafts drafts/images
+          git diff --cached --quiet || (git commit -m "drafts: refresh previews" && git push)

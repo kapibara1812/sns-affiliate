@@ -1,0 +1,66 @@
+name: drafts-weekly
+
+# ③ 毎週日曜 10:13 JST（= 01:13 UTC）に、翌週分の下書きをまとめて作る。
+# ④ あわせて、公開から1週間以上たって保存が多かった投稿を、角度を変えた下書きにする。
+# 下書きは「承認: はい」にするまで投稿されない。確認ページ: <PUBLIC_BASE_URL>/drafts/
+on:
+  schedule:
+    - cron: "13 1 * * 0"
+  workflow_dispatch:
+    inputs:
+      count:
+        description: "作る下書きの本数"
+        default: "10"
+      analyze:
+        description: "research/posts.csv から型を作り直してから下書きを作る"
+        type: boolean
+        default: false
+
+concurrency:
+  group: sns-affiliate
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  drafts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      PYTHONPATH: src
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_IMAGE_MODEL: ${{ vars.OPENAI_IMAGE_MODEL }}
+      OPENAI_IMAGE_QUALITY: ${{ vars.OPENAI_IMAGE_QUALITY }}
+      RAKUTEN_ENABLED: ${{ vars.RAKUTEN_ENABLED }}
+      RAKUTEN_APP_ID: ${{ secrets.RAKUTEN_APP_ID }}
+      RAKUTEN_ACCESS_KEY: ${{ secrets.RAKUTEN_ACCESS_KEY }}
+      RAKUTEN_AFFILIATE_ID: ${{ secrets.RAKUTEN_AFFILIATE_ID }}
+      PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
+      IG_ACCOUNT_NAME: ${{ vars.IG_ACCOUNT_NAME }}
+      CLAUDE_MODEL: ${{ vars.CLAUDE_MODEL }}
+      DRAFTS_PER_BATCH: ${{ vars.DRAFTS_PER_BATCH }}
+      IG_USER_ID: ${{ secrets.IG_USER_ID }}
+      IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: ① Analyze research (任意)
+        if: ${{ inputs.analyze }}
+        run: python -m sns_affiliate analyze-research
+      - name: ④ Remix hits
+        run: python -m sns_affiliate remix
+      - name: ③ Make drafts
+        run: python -m sns_affiliate make-drafts --count "${{ inputs.count || '10' }}"
+      - name: Commit
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A drafts docs data research
+          git diff --cached --quiet || (git commit -m "drafts: weekly batch $(date +%F)" && git push)
