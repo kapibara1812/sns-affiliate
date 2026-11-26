@@ -78,7 +78,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A data docs inbox drafts
+          for p in data docs inbox drafts; do [ -e "$p" ] && git add -A "$p"; done; true
           if git diff --cached --quiet; then echo "今日は新しい投稿はありません"; exit 0; fi
           git commit -m "post: prepare $(date +%F)"
           git push
@@ -90,5 +90,5 @@ jobs:
       - name: Commit result
         if: always()
         run: |
-          git add -A data docs inbox drafts
+          for p in data docs inbox drafts; do [ -e "$p" ] && git add -A "$p"; done; true
           git diff --cached --quiet || (git commit -m "post: publish $(date +%F)" && git push)
