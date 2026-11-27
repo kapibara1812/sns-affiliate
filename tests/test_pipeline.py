@@ -902,3 +902,15 @@ def test_rakuten_switch_off_never_touches_rakuten(tmp_project, monkeypatch):
     # 下書き作り: 楽天の商品を探しに行かない
     made = pipeline.generate_drafts(s, count=4, writer=FakeWriter(), rng=random.Random(0), render_previews=False)
     assert all(d.kind in ("a8", "tips") for d in made)
+
+
+def test_empty_env_vars_fall_back_to_defaults(monkeypatch):
+    """GitHub Actions は未設定の vars を空文字で渡す。それでも既定値で動くこと."""
+    from sns_affiliate import config as cfg
+    for name in ("ROUNDUP_SIZE", "CLAUDE_MODEL", "OPENAI_IMAGE_MODEL", "A8_COOLDOWN_DAYS", "DRAFTS_PER_BATCH"):
+        monkeypatch.setenv(name, "")
+    s = cfg.Settings()
+    assert s.roundup_size == 5
+    assert s.claude_model == "claude-opus-5-5"
+    assert s.image_model == "gpt-image-2"
+    assert s.a8_cooldown_days == 14
